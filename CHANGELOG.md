@@ -1,7 +1,12 @@
 <!-- Keep a Changelog guide -> https://keepachangelog.com -->
 
-# dependency-manager Changelog
+# Dependency Manager Changelog
 
 ## [Unreleased]
 ### Added
-- Initial scaffold created from [IntelliJ Platform Plugin Template](https://github.com/JetBrains/intellij-platform-plugin-template)
+- Dependency analysis automation
+- Maven local repository cleanup
+- Interactive preview interface
+- Multi-threaded progress monitoring
+
+[中文更新日志](CHANGELOG-CN.md)

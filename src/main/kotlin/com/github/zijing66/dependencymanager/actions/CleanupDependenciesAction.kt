@@ -10,7 +10,6 @@ class CleanupDependenciesAction : AnAction() {
         val project = e.project ?: return
         val toolWindowManager = ToolWindowManager.getInstance(project)
         val toolWindow: ToolWindow = toolWindowManager.getToolWindow("DependencyManager") ?: return
-
         if (!toolWindow.isVisible) {
             toolWindow.show {
                 // 可选的回调，在工具窗口显示后执行
@@ -25,4 +24,4 @@ class CleanupDependenciesAction : AnAction() {
         // 只在项目中启用这个action
         e.presentation.isEnabled = e.project != null
     }
-} 
+}

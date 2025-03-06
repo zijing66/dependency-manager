@@ -8,7 +8,7 @@
 
     <extensions defaultExtensionNs="com.intellij">
         <toolWindow 
-            id="Dependency Cleanup" 
+            id="DependencyManager"
             secondary="false"
             icon="AllIcons.General.Modified" 
             anchor="right"
@@ -23,23 +23,14 @@
             <add-to-group group-id="ToolsMenu" anchor="last"/>
             <action id="DependencyManager.Cleanup"
                     class="com.github.zijing66.dependencymanager.actions.CleanupDependenciesAction"
-                    text="Clean Failed Dependencies"
-                    description="Clean up failed dependency downloads"
+                    text="Dependency Manager"
+                    description="Manager Local Package Repository Tools"
                     icon="AllIcons.General.Modified">
                 <keyboard-shortcut first-keystroke="control alt D" keymap="$default"/>
                 <keyboard-shortcut first-keystroke="meta alt D" keymap="Mac OS X"/>
                 <keyboard-shortcut first-keystroke="meta alt D" keymap="Mac OS X 10.5+"/>
             </action>
         </group>
-
-        <!-- 编辑器右键菜单 -->
-        <action id="DependencyManager.EditorPopup"
-                class="com.github.zijing66.dependencymanager.actions.CleanupDependenciesAction"
-                text="Clean Failed Dependencies"
-                description="Clean up failed dependency downloads"
-                icon="AllIcons.General.Modified">
-            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
-        </action>
     </actions>
 
 </idea-plugin>
