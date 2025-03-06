@@ -1,18 +1,45 @@
 <!-- Plugin Configuration File. Read more: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
 <idea-plugin>
     <id>com.github.zijing66.dependencymanager</id>
-    <name>dependency-manager</name>
+    <name>Dependency Manager</name>
     <vendor>zijing66</vendor>
 
     <depends>com.intellij.modules.platform</depends>
 
-    <resource-bundle>messages.MyBundle</resource-bundle>
-
     <extensions defaultExtensionNs="com.intellij">
-        <toolWindow factoryClass="com.github.zijing66.dependencymanager.toolWindow.MyToolWindowFactory" id="MyToolWindow"/>
+        <toolWindow 
+            id="Dependency Cleanup" 
+            secondary="false"
+            icon="AllIcons.General.Modified" 
+            anchor="right"
+            factoryClass="com.github.zijing66.dependencymanager.ui.DependencyCleanupToolWindow"/>
     </extensions>
 
-    <applicationListeners>
-        <listener class="com.github.zijing66.dependencymanager.listeners.MyApplicationActivationListener" topic="com.intellij.openapi.application.ApplicationActivationListener"/>
-    </applicationListeners>
+    <actions>
+        <!-- 主菜单项 -->
+        <group id="DependencyManager.MainMenu"
+               text="Dependency Manager"
+               description="Dependency management operations">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+            <action id="DependencyManager.Cleanup"
+                    class="com.github.zijing66.dependencymanager.actions.CleanupDependenciesAction"
+                    text="Clean Failed Dependencies"
+                    description="Clean up failed dependency downloads"
+                    icon="AllIcons.General.Modified">
+                <keyboard-shortcut first-keystroke="control alt D" keymap="$default"/>
+                <keyboard-shortcut first-keystroke="meta alt D" keymap="Mac OS X"/>
+                <keyboard-shortcut first-keystroke="meta alt D" keymap="Mac OS X 10.5+"/>
+            </action>
+        </group>
+
+        <!-- 编辑器右键菜单 -->
+        <action id="DependencyManager.EditorPopup"
+                class="com.github.zijing66.dependencymanager.actions.CleanupDependenciesAction"
+                text="Clean Failed Dependencies"
+                description="Clean up failed dependency downloads"
+                icon="AllIcons.General.Modified">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+        </action>
+    </actions>
+
 </idea-plugin>
