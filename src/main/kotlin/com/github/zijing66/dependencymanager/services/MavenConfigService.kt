@@ -51,18 +51,57 @@ class MavenConfigService {
         return "${System.getProperty("user.home")}/.m2/repository"
     }
     
+    private fun scanForFailedDownloads(dir: File, onFileFound: (File) -> Unit) {
+        dir.listFiles()?.forEach { file ->
+            when {
+                file.isDirectory -> scanForFailedDownloads(file, onFileFound)
+                file.name.endsWith(".jar.lastUpdated") || 
+                file.name.endsWith(".pom.lastUpdated") -> {
+                    onFileFound(file)
+                }
+            }
+        }
+    }
+    private fun extractPackageInfo(file: File): Triple<String, String, String> {
+        val repoPath = getLocalRepository().replace('\\', '/')
+        // 获取父目录的相对路径（排除文件名）
+        val parentPath = file.parentFile.absolutePath.replace('\\', '/')
+        val relativePath = parentPath.removePrefix(repoPath).trimStart('/')
+        
+        val componentsPaths = relativePath.split("/").filter { it.isNotEmpty() }
+        if (componentsPaths.size >= 3) {
+            val groupId = componentsPaths.dropLast(2).joinToString(".")
+            val artifactId = componentsPaths[componentsPaths.size - 2]
+            // 直接从路径组件获取版本号
+            val version = componentsPaths.last()
+            
+            return Triple(
+                "$groupId:$artifactId",
+                version,
+                relativePath  // 新增相对路径返回
+            )
+        }
+        
+        return Triple(
+            file.parentFile.name,
+            file.name.substringBefore(".lastUpdated"),
+            relativePath  // 新增相对路径返回
+        )
+    }
     fun previewCleanup(): CleanupSummary {
         val repoDir = File(getLocalRepository())
         val previewItems = mutableListOf<CleanupPreview>()
         var totalSize = 0L
         
         scanForFailedDownloads(repoDir) { file ->
+            val (packageName, version, relativePath) = extractPackageInfo(file)
             previewItems.add(CleanupPreview(
                 path = file.absolutePath,
-                packageName = file.parentFile.name,
+                packageName = "$packageName:$version",
                 fileSize = file.length(),
                 lastModified = file.lastModified(),
-                dependencyType = DependencyType.MAVEN
+                dependencyType = DependencyType.MAVEN,
+                relativePath = relativePath  // 添加相对路径到预览项
             ))
             totalSize += file.length()
         }
@@ -106,15 +145,5 @@ class MavenConfigService {
                 onComplete(results)
             }
         }.queue()
-    }
-    
-    private fun scanForFailedDownloads(dir: File, onFileFound: (File) -> Unit) {
-        dir.listFiles()?.forEach { file ->
-            when {
-                file.isDirectory -> scanForFailedDownloads(file, onFileFound)
-                file.name.endsWith(".jar.lastUpdated") || 
-                file.name.endsWith(".pom.lastUpdated") -> onFileFound(file)
-            }
-        }
     }
 }

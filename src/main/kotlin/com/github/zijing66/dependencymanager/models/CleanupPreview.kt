@@ -6,7 +6,8 @@ data class CleanupPreview(
     val fileSize: Long,
     val lastModified: Long,
     val dependencyType: DependencyType,
-    var selected: Boolean = true
+    var selected: Boolean = true,
+    val relativePath: String
 )
 
 data class CleanupSummary(
