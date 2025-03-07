@@ -3,7 +3,6 @@ package com.github.zijing66.dependencymanager.actions
 import com.github.zijing66.dependencymanager.services.CompatibilityUtil
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
-import com.intellij.openapi.wm.ToolWindowManager
 
 class CleanupDependenciesAction : AnAction() {
     override fun actionPerformed(e: AnActionEvent) {

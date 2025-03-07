@@ -18,7 +18,7 @@ enum class DependencyType {
          */
         @JvmStatic
         fun safeValues(): Array<DependencyType> {
-            return values()
+            return arrayOf(MAVEN, GRADLE, NPM, UNKNOWN)
         }
         
         /**
@@ -28,9 +28,43 @@ enum class DependencyType {
         @JvmStatic
         fun safeValueOf(name: String): DependencyType {
             return try {
-                valueOf(name)
+                when (name.uppercase()) {
+                    "MAVEN" -> MAVEN
+                    "GRADLE" -> GRADLE
+                    "NPM" -> NPM
+                    "UNKNOWN" -> UNKNOWN
+                    else -> UNKNOWN
+                }
             } catch (e: Exception) {
                 UNKNOWN
+            }
+        }
+        
+        /**
+         * 获取依赖类型的名称
+         * 避免直接使用kotlin.enums包中的方法
+         */
+        @JvmStatic
+        fun safeName(type: DependencyType): String {
+            return when (type) {
+                MAVEN -> "MAVEN"
+                GRADLE -> "GRADLE"
+                NPM -> "NPM"
+                UNKNOWN -> "UNKNOWN"
+            }
+        }
+        
+        /**
+         * 获取依赖类型的序号
+         * 避免直接使用kotlin.enums包中的方法
+         */
+        @JvmStatic
+        fun safeOrdinal(type: DependencyType): Int {
+            return when (type) {
+                MAVEN -> 0
+                GRADLE -> 1
+                NPM -> 2
+                UNKNOWN -> 3
             }
         }
     }

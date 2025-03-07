@@ -81,7 +81,18 @@ object CompatibilityUtil {
         return try {
             // 尝试使用新版本API (223+)
             if (getIdeBaselineVersion() >= 223) {
-                ContentFactory.getInstance()
+                // 使用反射安全地调用getInstance方法
+                try {
+                    val method = ContentFactory::class.java.getMethod("getInstance")
+                    method.invoke(null) as ContentFactory
+                } catch (e: Exception) {
+                    LOG.warn("Failed to get ContentFactory using getInstance reflection", e)
+                    // 尝试使用旧版本API
+                    val serviceMethod = ContentFactory::class.java.getMethod("SERVICE")
+                    val service = serviceMethod.invoke(null)
+                    val instanceMethod = service.javaClass.getMethod("getInstance")
+                    instanceMethod.invoke(service) as ContentFactory
+                }
             } else {
                 // 尝试使用旧版本API
                 try {
@@ -91,7 +102,7 @@ object CompatibilityUtil {
                     val instanceMethod = service.javaClass.getMethod("getInstance")
                     instanceMethod.invoke(service) as ContentFactory
                 } catch (e: Exception) {
-                    LOG.warn("Failed to get ContentFactory using reflection", e)
+                    LOG.warn("Failed to get ContentFactory using SERVICE reflection", e)
                     // 尝试直接获取服务实例
                     val method = ContentFactory::class.java.getMethod("getInstance")
                     method.invoke(null) as ContentFactory
