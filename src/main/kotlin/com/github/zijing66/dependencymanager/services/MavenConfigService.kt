@@ -13,6 +13,10 @@ import javax.xml.parsers.DocumentBuilderFactory
 
 @Service
 class MavenConfigService {
+
+    // 添加自定义仓库路径存储
+    private var customRepoPath: String? = null
+
     private fun getMavenHome(): String {
         // 首先检查环境变量
         System.getenv("MAVEN_HOME")?.let { return it }
@@ -33,6 +37,8 @@ class MavenConfigService {
     }
     
     fun getLocalRepository(): String {
+        customRepoPath?.takeIf { isValidRepoPath(it) }?.let { return it }
+        
         val settingsFile = File(getMavenHome(), "conf/settings.xml")
         if (!settingsFile.exists()) {
             return "${System.getProperty("user.home")}/.m2/repository"
@@ -51,7 +57,28 @@ class MavenConfigService {
         return "${System.getProperty("user.home")}/.m2/repository"
     }
     
+    // 新增路径更新方法
+    fun updateLocalRepository(newPath: String) {
+        if (isValidRepoPath(newPath)) {
+            customRepoPath = newPath
+        } else {
+            throw IllegalArgumentException("Invalid repository path: $newPath")
+        }
+    }
+    
+    // 新增路径验证方法
+    private fun isValidRepoPath(path: String): Boolean {
+        return try {
+            val file = File(path)
+            file.isDirectory && file.canWrite()
+        } catch (e: SecurityException) {
+            false
+        }
+    }
+    
+    // 修改扫描方法使用当前仓库路径
     private fun scanForFailedDownloads(dir: File, onFileFound: (File) -> Unit) {
+        val repoDir = File(getLocalRepository()) // 使用动态获取路径
         dir.listFiles()?.forEach { file ->
             when {
                 file.isDirectory -> scanForFailedDownloads(file, onFileFound)
