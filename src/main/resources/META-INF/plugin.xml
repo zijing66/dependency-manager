@@ -5,7 +5,7 @@
     <vendor>zijing66</vendor>
 
     <depends>com.intellij.modules.platform</depends>
-    <idea-version since-build="223" until-build="251.*"/>
+    <idea-version since-build="213" until-build="251.*"/>
 
     <extensions defaultExtensionNs="com.intellij">
         <toolWindow 

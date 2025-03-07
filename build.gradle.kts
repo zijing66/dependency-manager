@@ -104,6 +104,9 @@ intellijPlatform {
     pluginVerification {
         ides {
             recommended()
+            listOf("2021.3", "2022.3", "2023.1", "2023.2", "2023.3", "2024.1").forEach {
+                ide(it)
+            }
         }
     }
 }

@@ -1,18 +1,20 @@
 package com.github.zijing66.dependencymanager.actions
 
+import com.github.zijing66.dependencymanager.services.CompatibilityUtil
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.wm.ToolWindowManager
-import com.intellij.openapi.wm.ToolWindow
 
 class CleanupDependenciesAction : AnAction() {
     override fun actionPerformed(e: AnActionEvent) {
         val project = e.project ?: return
-        val toolWindowManager = ToolWindowManager.getInstance(project)
-        val toolWindow: ToolWindow = toolWindowManager.getToolWindow("DependencyManager") ?: return
+        
+        // 使用兼容性工具类获取工具窗口
+        val toolWindow = CompatibilityUtil.getToolWindow(project, "DependencyManager") ?: return
+        
         if (!toolWindow.isVisible) {
-            toolWindow.show {
-                // 可选的回调，在工具窗口显示后执行
+            // 使用兼容性工具类显示工具窗口
+            CompatibilityUtil.showToolWindow(toolWindow) {
                 toolWindow.activate(null)
             }
         } else {
