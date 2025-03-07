@@ -5,6 +5,8 @@ import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowManager
+import com.intellij.ui.content.ContentFactory
+import com.intellij.ui.content.ContentManager
 
 /**
  * 兼容性工具类，用于处理不同IntelliJ IDEA版本的API差异
@@ -69,6 +71,48 @@ object CompatibilityUtil {
             } catch (e: Exception) {
                 LOG.error("Failed to show tool window using basic method", e)
             }
+        }
+    }
+    
+    /**
+     * 获取ContentFactory实例，兼容不同版本的API
+     */
+    fun getContentFactory(): ContentFactory {
+        return try {
+            // 尝试使用新版本API (223+)
+            if (getIdeBaselineVersion() >= 223) {
+                ContentFactory.getInstance()
+            } else {
+                // 尝试使用旧版本API
+                try {
+                    // 反射调用旧版本的静态方法
+                    val serviceMethod = ContentFactory::class.java.getMethod("SERVICE")
+                    val service = serviceMethod.invoke(null)
+                    val instanceMethod = service.javaClass.getMethod("getInstance")
+                    instanceMethod.invoke(service) as ContentFactory
+                } catch (e: Exception) {
+                    LOG.warn("Failed to get ContentFactory using reflection", e)
+                    // 尝试直接获取服务实例
+                    val method = ContentFactory::class.java.getMethod("getInstance")
+                    method.invoke(null) as ContentFactory
+                }
+            }
+        } catch (e: Exception) {
+            LOG.error("Failed to get ContentFactory", e)
+            throw RuntimeException("Failed to get ContentFactory", e)
+        }
+    }
+    
+    /**
+     * 创建工具窗口内容，兼容不同版本的API
+     */
+    fun createContent(contentManager: ContentManager, component: javax.swing.JComponent, displayName: String, isLockable: Boolean) {
+        try {
+            val factory = getContentFactory()
+            val content = factory.createContent(component, displayName, isLockable)
+            contentManager.addContent(content)
+        } catch (e: Exception) {
+            LOG.error("Failed to create content", e)
         }
     }
 } 

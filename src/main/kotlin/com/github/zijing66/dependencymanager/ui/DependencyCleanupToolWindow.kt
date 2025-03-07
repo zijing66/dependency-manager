@@ -3,6 +3,7 @@ package com.github.zijing66.dependencymanager.ui
 import com.github.zijing66.dependencymanager.models.CleanupPreview
 import com.github.zijing66.dependencymanager.models.CleanupSummary
 import com.github.zijing66.dependencymanager.models.DependencyType
+import com.github.zijing66.dependencymanager.services.CompatibilityUtil
 import com.github.zijing66.dependencymanager.services.DependencyManagerDetector
 import com.github.zijing66.dependencymanager.services.MavenConfigService
 import com.intellij.openapi.diagnostic.logger
@@ -30,13 +31,13 @@ private val LOG = logger<DependencyCleanupToolWindow>()
 class DependencyCleanupToolWindow : ToolWindowFactory {
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
         LOG.info("Creating tool window content")
-        val contentFactory = ContentFactory.getInstance()
-        val content = contentFactory.createContent(
+        // 使用兼容性工具类创建内容
+        CompatibilityUtil.createContent(
+            toolWindow.contentManager,
             DependencyCleanupPanel(project),
             "",
             false
         )
-        toolWindow.contentManager.addContent(content)
     }
 
     override fun shouldBeAvailable(project: Project) = true
