@@ -115,7 +115,8 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
     private var currentPreview: CleanupSummary? = null
     private val headerCheckBox = JCheckBox()
 
-    // 添加按钮引用
+    private lateinit var snapshotCheckBox: JCheckBox
+    private lateinit var groupArtifactField: JTextField
     private lateinit var cleanButton: JButton
 
     init {
@@ -312,22 +313,38 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
                     }
                 }
             }
-
             val repoPanel = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
                 alignmentX = Component.LEFT_ALIGNMENT
                 add(JLabel("Maven repository: "))
                 add(pathField)
                 add(refreshButton)
             }
+            val filterPanel = JPanel(FlowLayout(FlowLayout.LEFT, 5, 0)).apply {
+                alignmentX = Component.LEFT_ALIGNMENT
+                add(JLabel("Choose:"))
+                add(Box.createHorizontalStrut(5)) // 添加间隔
+                add(JCheckBox("SNAPSHOT").apply {
+                    snapshotCheckBox = this  // 初始化复选框引用
+                    toolTipText = "Include SNAPSHOT packages"
+                })
+                add(Box.createHorizontalStrut(20)) // 加大间隔
+                add(JLabel("Choose Group:Artifact"))
+                add(Box.createHorizontalStrut(5))
+                add(JTextField(15).apply {
+                    groupArtifactField = this  // 初始化输入框引用
+                    toolTipText = "Format: groupId:artifactId or groupId"
+                })
+            }
             val buttonPanel = JPanel(FlowLayout(FlowLayout.LEFT)).apply {
                 alignmentX = Component.LEFT_ALIGNMENT
                 add(previewButton)
+                add(Box.createHorizontalStrut(10))
                 add(cleanButton)
             }
-
             controlPanel.add(repoPanel)
             controlPanel.add(pathStatusLabel)
-            controlPanel.add(buttonPanel)
+            controlPanel.add(filterPanel)  // 独立的过滤条件面板
+            controlPanel.add(buttonPanel)   // 独立的按钮面板
             controlPanel.add(Box.createVerticalStrut(5))
             controlPanel.add(progressBar.apply {
                 alignmentX = Component.LEFT_ALIGNMENT
@@ -358,7 +375,11 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
         SwingUtilities.invokeLater {
             when (val service = MavenConfigService()) {
                 is MavenConfigService -> {
-                    currentPreview = service.previewCleanup()
+                    currentPreview = service.previewCleanup(
+                        // 添加参数传递
+                        includeSnapshot = snapshotCheckBox.isSelected,
+                        groupArtifact = groupArtifactField.text.takeIf { it.isNotEmpty() }
+                    )
                     previewModel.setData(currentPreview?.previewItems ?: emptyList())
                     headerCheckBox.isSelected = false
                     updateStatus()
