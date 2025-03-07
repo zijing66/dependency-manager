@@ -10,3 +10,12 @@
 - Multi-threaded progress monitoring
 
 [中文更新日志](CHANGELOG-CN.md)
+
+## [1.0.0]
+### Added
+- Support deleting failed Maven downloads  
+- Support deleting SNAPSHOT packages and specified groupId/artifactId  
+
+## [1.0.1]
+### Fixed
+- Compatibility optimization and search performance optimization
