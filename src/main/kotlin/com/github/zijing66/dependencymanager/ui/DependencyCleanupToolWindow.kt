@@ -16,7 +16,7 @@ import com.intellij.ui.table.JBTable
 import com.intellij.util.ui.JBUI
 import java.awt.BorderLayout
 import java.awt.Component
-import java.awt.FlowLayout
+import java.awt.Dimension
 import java.text.DecimalFormat
 import java.text.SimpleDateFormat
 import java.util.*
@@ -313,13 +313,19 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
                     }
                 }
             }
-            val repoPanel = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
+            val repoPanel = JPanel().apply {
+                layout = BoxLayout(this, BoxLayout.X_AXIS)
                 alignmentX = Component.LEFT_ALIGNMENT
                 add(JLabel("Maven repository: "))
-                add(pathField)
+                add(Box.createHorizontalStrut(5))
+                add(pathField.apply {
+                    maximumSize = Dimension(Int.MAX_VALUE, preferredSize.height) // 允许横向扩展
+                })
+                add(Box.createHorizontalStrut(5))
                 add(refreshButton)
             }
-            val filterPanel = JPanel(FlowLayout(FlowLayout.LEFT, 5, 0)).apply {
+            val filterPanel = JPanel().apply {
+                layout = BoxLayout(this, BoxLayout.X_AXIS)
                 alignmentX = Component.LEFT_ALIGNMENT
                 add(JLabel("Choose:"))
                 add(Box.createHorizontalStrut(5)) // 添加间隔
@@ -328,41 +334,50 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
                     toolTipText = "Include SNAPSHOT packages"
                 })
                 add(Box.createHorizontalStrut(20)) // 加大间隔
-                add(JLabel("Choose Group:Artifact"))
+                add(JLabel("Choose [Group:Artifact]:"))
                 add(Box.createHorizontalStrut(5))
                 add(JTextField(15).apply {
                     groupArtifactField = this  // 初始化输入框引用
                     toolTipText = "Format: groupId:artifactId or groupId"
                 })
             }
-            val buttonPanel = JPanel(FlowLayout(FlowLayout.LEFT)).apply {
+            val buttonPanel = JPanel().apply {
+                layout = BoxLayout(this, BoxLayout.X_AXIS)
                 alignmentX = Component.LEFT_ALIGNMENT
                 add(previewButton)
                 add(Box.createHorizontalStrut(10))
                 add(cleanButton)
+                add(Box.createHorizontalGlue())
             }
-            controlPanel.add(repoPanel)
-            controlPanel.add(pathStatusLabel)
-            controlPanel.add(filterPanel)  // 独立的过滤条件面板
-            controlPanel.add(buttonPanel)   // 独立的按钮面板
-            controlPanel.add(Box.createVerticalStrut(5))
-            controlPanel.add(progressBar.apply {
-                alignmentX = Component.LEFT_ALIGNMENT
-                isVisible = false
-            })
-            controlPanel.add(Box.createVerticalStrut(5))
-            controlPanel.add(statusLabel.apply {
-                alignmentX = Component.LEFT_ALIGNMENT
-            })
+
+            controlPanel.apply {
+                add(repoPanel)
+                add(Box.createVerticalStrut(5))
+                add(pathStatusLabel)
+                add(Box.createVerticalStrut(10))
+                add(filterPanel)
+                add(Box.createVerticalStrut(10))
+                add(buttonPanel)
+                add(Box.createVerticalStrut(5))
+                add(progressBar.apply {
+                    alignmentX = Component.LEFT_ALIGNMENT
+                    isVisible = false
+                })
+                add(Box.createVerticalStrut(5))
+                add(statusLabel.apply {
+                    alignmentX = Component.LEFT_ALIGNMENT
+                })
+            }
 
             add(controlPanel, BorderLayout.NORTH)
 
             // Table panel
             val tablePanel = JPanel(BorderLayout()).apply {
-                border = JBUI.Borders.empty(5, 5, 5, 5)
+                border = JBUI.Borders.empty(5)
+                add(JBScrollPane(previewTable).apply {
+                    preferredSize = Dimension(preferredSize.width, 300) // 固定初始高度
+                }, BorderLayout.CENTER)
             }
-
-            tablePanel.add(JBScrollPane(previewTable), BorderLayout.CENTER)
             add(tablePanel, BorderLayout.CENTER)
         }
     }
