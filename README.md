@@ -9,8 +9,9 @@ Professional IDE plugin for managing project dependencies and cleaning unused ar
 
 ✅ Automatic dependency type detection (Maven/Gradle)  
 ✅ Visual preview of cleanup candidates  
+✅ Support deleting failed Maven downloads  
+✅ Support deleting SNAPSHOT packages and specified groupId/artifactId  
 ✅ Multi-threaded cleanup with progress monitoring  
-✅ Smart repository size analysis  
 ✅ Cross-platform support
 
 [查看中文文档](README-CN.md)
