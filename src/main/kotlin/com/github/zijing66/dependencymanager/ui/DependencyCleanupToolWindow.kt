@@ -112,7 +112,8 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
     private val statusLabel: JLabel
     private var currentPreview: CleanupSummary? = null
     private val headerCheckBox = JCheckBox()
-
+    private lateinit var configService: IConfigService
+    private lateinit var currentDependencyType: DependencyType
     private lateinit var snapshotCheckBox: JCheckBox
     private lateinit var groupArtifactField: JTextField
     private lateinit var cleanButton: JButton
@@ -234,7 +235,7 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
 
     private fun validForDependencyType(func: () -> Unit, dependencyTypeList: Array<DependencyType>) {
         for (dependencyType in dependencyTypeList) {
-            if (dependencyType == DependencyType.UNKNOWN) {
+            if (dependencyType == DependencyType.UNKNOWN || !dependencyTypeList.contains(currentDependencyType)) {
                 continue
             }
             func()
@@ -248,19 +249,44 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
             border = JBUI.Borders.empty(5)
         }
+        add(controlPanel, BorderLayout.NORTH)
 
         val detector = DependencyManagerDetector()
         val dependencyType = detector.detectDependencyType(project)
 
-        controlPanel.add(JLabel("Detected dependency manager: $dependencyType").apply {
-            alignmentX = Component.LEFT_ALIGNMENT
-        })
+        updateUIComponents(controlPanel, dependencyType)
+    }
 
-        val configService: IConfigService = when (dependencyType) {
-            DependencyType.MAVEN -> MavenConfigService(project)
-            DependencyType.GRADLE -> GradleConfigService(project)
-            else -> throw IllegalArgumentException("Unsupported dependency type: $dependencyType")
+    private fun updateUIComponents(controlPanel: JPanel, chosenDependencyType : DependencyType) {
+        currentDependencyType = chosenDependencyType
+        // 清空当前组件
+        controlPanel.removeAll()
+        // 创建一个水平布局的面板
+        val topRowPanel = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.X_AXIS)
+            add(JLabel("Dependency manager: $chosenDependencyType").apply {
+                alignmentX = Component.LEFT_ALIGNMENT
+            })
+            add(Box.createHorizontalStrut(10)) // 添加间隔
+            // 添加下拉菜单供用户选择依赖管理器
+            add(JLabel("Switch to: ").apply {
+                alignmentX = Component.LEFT_ALIGNMENT
+            })
+            val dependencyTypeList = DependencyType.safeValues().filter { it != DependencyType.UNKNOWN && it != chosenDependencyType }.toTypedArray()
+            val dependencyTypeComboBox = JComboBox(dependencyTypeList).apply {
+                addActionListener {
+                    val dependencyType = selectedItem as DependencyType
+                    updateUIComponents(controlPanel, dependencyType)
+                }
+            }
+            add(dependencyTypeComboBox)
         }
+
+        controlPanel.add(topRowPanel) // 将水平面板添加到控制面板
+
+        // 初始化配置服务
+        updateConfigService(chosenDependencyType)
+
         // 添加仓库路径显示
         var currentRepoPath = configService.getLocalRepository(false)
 
@@ -269,7 +295,7 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
             font = font.deriveFont(font.size2D - 1f)
         }
 
-        lateinit var refreshButton: JButton;
+        lateinit var refreshButton: JButton
 
         val previewButton = JButton("Preview Cleanup").apply {
             addActionListener { loadPreview(configService) }
@@ -386,8 +412,6 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
             })
         }
 
-        add(controlPanel, BorderLayout.NORTH)
-
         // Table panel
         val tablePanel = JPanel(BorderLayout()).apply {
             border = JBUI.Borders.empty(5)
@@ -395,7 +419,20 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
                 preferredSize = Dimension(preferredSize.width, 300) // 固定初始高度
             }, BorderLayout.CENTER)
         }
+        remove(tablePanel)
         add(tablePanel, BorderLayout.CENTER)
+
+        // 刷新面板
+        controlPanel.revalidate()
+        controlPanel.repaint()
+    }
+
+    private fun updateConfigService(dependencyType: DependencyType) {
+        configService = when (dependencyType) {
+            DependencyType.MAVEN -> MavenConfigService(project)
+            DependencyType.GRADLE -> GradleConfigService(project)
+            else -> throw IllegalArgumentException("Unsupported dependency type: $dependencyType")
+        }
     }
 
     private fun loadPreview(configService: IConfigService) {
