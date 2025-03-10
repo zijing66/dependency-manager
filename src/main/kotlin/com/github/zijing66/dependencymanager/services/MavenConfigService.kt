@@ -12,7 +12,7 @@ import java.io.File
 import javax.xml.parsers.DocumentBuilderFactory
 
 @Service
-class MavenConfigService {
+class MavenConfigService(project: Project) : AbstractConfigService(project) {
 
     // 添加自定义仓库路径存储
     private var customRepoPath: String? = null
@@ -34,8 +34,8 @@ class MavenConfigService {
         return ""
     }
 
-    fun getLocalRepository(): String {
-        customRepoPath?.takeIf { isValidRepoPath(it) }?.let { return it }
+    override fun getLocalRepository(refresh: Boolean): String {
+        customRepoPath?.takeIf { !refresh && isValidRepoPath(it) }?.let { return it }
 
         val settingsFile = File(getMavenHome(), "conf/settings.xml")
         if (!settingsFile.exists()) {
@@ -56,7 +56,7 @@ class MavenConfigService {
     }
 
     // 新增路径更新方法
-    fun updateLocalRepository(newPath: String) {
+    override fun updateLocalRepository(newPath: String) {
         if (isValidRepoPath(newPath)) {
             customRepoPath = newPath
         } else {
@@ -64,18 +64,8 @@ class MavenConfigService {
         }
     }
 
-    // 新增路径验证方法
-    private fun isValidRepoPath(path: String): Boolean {
-        return try {
-            val file = File(path)
-            file.isDirectory && file.canWrite()
-        } catch (e: SecurityException) {
-            false
-        }
-    }
-
     // 修改扫描方法，使用目录级别的去重和性能优化
-    private fun scanForFailedDownloads(
+    private fun scanRepository(
         dir: File, onDirFound: (File) -> Unit, includeSnapshot: Boolean = false, groupArtifact: String? = null
     ) {
         val processedDirs = mutableSetOf<String>() // 防止重复处理目录
@@ -120,12 +110,10 @@ class MavenConfigService {
                     val groupPath = artifactDir?.parentFile?.relativeTo(dir)?.path?.replace('\\', '/')
                     groupPath == group && artifactDir.name == artifact
                 }
-
                 1 -> {
                     val group = targetGroupArtifact[0]
                     relativePath.startsWith(group)
                 }
-
                 else -> {
                     true
                 }
@@ -137,11 +125,9 @@ class MavenConfigService {
             // 筛选逻辑
             val shouldInclude = when {
                 // 如果指定了groupId:artifactId但不匹配，则排除
-                groupArtifact != null && !isTargetGroupArtifact -> false
-                // 如果是SNAPSHOT目录但不包含SNAPSHOT，则排除
-                !includeSnapshot && isSnapshotDir -> false
-                // 如果既不是失效包，也不是SNAPSHOT（当includeSnapshot=true时），也不是指定的groupId:artifactId，则排除
-                !hasLastUpdated && !(includeSnapshot && isSnapshotDir) && groupArtifact == null -> false
+                !hasLastUpdated && groupArtifact != null && !isTargetGroupArtifact -> false
+                // 如果是SNAPSHOT但目录不包含SNAPSHOT，则排除
+                !hasLastUpdated && includeSnapshot && !isSnapshotDir -> false
                 // 其他情况都包含
                 else -> true
             }
@@ -239,7 +225,7 @@ class MavenConfigService {
 
                     // 使用更智能的方式查找匹配的groupId目录
                     val matchingGroupDirs = findMatchingGroupDirectories(dir, groupParts)
-                    
+
                     // 对于每个匹配的groupId目录，递归查找所有子目录下的Maven版本目录
                     matchingGroupDirs.forEach { groupDir ->
                         findAllMavenVersionDirs(groupDir, dirsToProcess)
@@ -251,23 +237,23 @@ class MavenConfigService {
         // 同时查找失效包
         scanForFailedDownloadsOnly(dir, dirsToProcess)
     }
-    
+
     // 递归查找所有Maven版本目录
     private fun findAllMavenVersionDirs(dir: File, result: MutableSet<File>) {
         if (!dir.isDirectory) return
-        
+
         // 检查当前目录是否是有效的Maven版本目录
         if (isValidMavenVersionDir(dir)) {
             result.add(dir)
             return // 如果是版本目录，不再向下递归
         }
-        
+
         // 递归查找子目录
         dir.listFiles()?.filter { it.isDirectory }?.forEach { subDir ->
             findAllMavenVersionDirs(subDir, result)
         }
     }
-    
+
     // 查找匹配的groupId目录
     private fun findMatchingGroupDirectories(baseDir: File, groupParts: List<String>): List<File> {
         // 如果是空列表，返回空结果
@@ -314,14 +300,12 @@ class MavenConfigService {
         return results
     }
 
-    fun previewCleanup(
-        includeSnapshot: Boolean = false, groupArtifact: String? = null
-    ): CleanupSummary {
-        val repoDir = File(getLocalRepository())
+    override fun previewCleanup(includeSnapshot: Boolean, groupArtifact: String?): CleanupSummary {
+        val repoDir = File(getLocalRepository(false))
         val previewItems = mutableListOf<CleanupPreview>()
         var totalSize = 0L
 
-        scanForFailedDownloads(repoDir, { versionDir ->
+        scanRepository(repoDir, { versionDir ->
             val dirSize = calculateDirSize(versionDir)
             val (packageName, version, relativePath) = extractPackageInfo(versionDir)
 
@@ -354,7 +338,7 @@ class MavenConfigService {
         return size
     }
 
-    fun cleanupFailedDownloads(
+    override fun cleanupRepository(
         project: Project,
         selectedItems: List<CleanupPreview>,
         onProgress: (Int, Int) -> Unit,
@@ -395,8 +379,11 @@ class MavenConfigService {
     }
 
     private fun extractPackageInfo(file: File): Triple<String, String, String> {
-        val repoPath = getLocalRepository().replace('\\', '/')
-        val filePath = file.absolutePath.replace('\\', '/')
+        val repoPath = getLocalRepository(false).replace('\\', '/')
+        val filePath = file.absolutePath.replace(
+                '\\',
+                '/'
+            )
         val relativePath = filePath.removePrefix(repoPath).trimStart('/')
 
         val components = relativePath.split("/").filter { it.isNotEmpty() }

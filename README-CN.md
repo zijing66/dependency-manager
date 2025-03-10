@@ -8,11 +8,11 @@
 专业级的依赖管理与清理插件，主要功能：
 
 ✅ 自动识别项目依赖类型（Maven/Gradle暂未支持/Node暂未支持）  
-✅ 可视化预览待清理依赖仓库包
-✅ 支持删除maven下载失败的包
-✅ 支持删除SNAPSHOT包和指定groupId与artifactId的包
-✅ 带进度监控的多线程清理
-✅ 多平台支持
+✅ 可视化预览待清理依赖仓库包  
+✅ 支持删除maven下载失败的包  
+✅ 支持删除SNAPSHOT包和指定groupId与artifactId的包  
+✅ 带进度监控的多线程清理  
+✅ 多平台支持  
 
 [View English Documentation](README.md)
 <!-- Plugin description end -->
@@ -25,7 +25,7 @@
 
 - **手动安装:**  
   从[JetBrains Marketplace](https://plugins.jetbrains.com/plugin/MARKETPLACE_ID)  
-  或[GitHub Releases](https://github.com/zijing66/dependency-manager/releases)下载
+  或[GitHub Releases](https://github.com/zijing66/dependency-manager/releases)下载  
 
 ---
 

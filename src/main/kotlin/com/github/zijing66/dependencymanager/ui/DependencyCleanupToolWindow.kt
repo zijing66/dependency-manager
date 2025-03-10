@@ -3,16 +3,13 @@ package com.github.zijing66.dependencymanager.ui
 import com.github.zijing66.dependencymanager.models.CleanupPreview
 import com.github.zijing66.dependencymanager.models.CleanupSummary
 import com.github.zijing66.dependencymanager.models.DependencyType
-import com.github.zijing66.dependencymanager.services.CompatibilityUtil
-import com.github.zijing66.dependencymanager.services.DependencyManagerDetector
-import com.github.zijing66.dependencymanager.services.MavenConfigService
+import com.github.zijing66.dependencymanager.services.*
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBScrollPane
-import com.intellij.ui.content.ContentFactory
 import com.intellij.ui.table.JBTable
 import com.intellij.util.ui.JBUI
 import java.awt.BorderLayout
@@ -235,6 +232,16 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
         }
     }
 
+    private fun validForDependencyType(func: () -> Unit, dependencyTypeList: Array<DependencyType>) {
+        for (dependencyType in dependencyTypeList) {
+            if (dependencyType == DependencyType.UNKNOWN) {
+                continue
+            }
+            func()
+         }
+        return
+    }
+
     private fun setupUI() {
         // Top panel with controls
         val controlPanel = JPanel().apply {
@@ -249,165 +256,169 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
             alignmentX = Component.LEFT_ALIGNMENT
         })
 
-        // 添加Maven仓库路径显示
-        if (dependencyType == DependencyType.MAVEN) {
-            val mavenService = MavenConfigService()
-            var currentRepoPath = mavenService.getLocalRepository()
+        val configService: IConfigService = when (dependencyType) {
+            DependencyType.MAVEN -> MavenConfigService(project)
+            DependencyType.GRADLE -> GradleConfigService(project)
+            else -> throw IllegalArgumentException("Unsupported dependency type: $dependencyType")
+        }
+        // 添加仓库路径显示
+        var currentRepoPath = configService.getLocalRepository(false)
 
-            val pathStatusLabel = JLabel().apply {
-                foreground = JBColor.RED
-                font = font.deriveFont(font.size2D - 1f)
-            }
+        val pathStatusLabel = JLabel().apply {
+            foreground = JBColor.RED
+            font = font.deriveFont(font.size2D - 1f)
+        }
 
-            lateinit var refreshButton: JButton;
+        lateinit var refreshButton: JButton;
 
-            val previewButton = JButton("Preview Cleanup").apply {
-                addActionListener { loadPreview() }
-            }
+        val previewButton = JButton("Preview Cleanup").apply {
+            addActionListener { loadPreview(configService) }
+        }
 
-            val pathField = JTextField(currentRepoPath, 40).apply {
+        val pathField = JTextField(currentRepoPath, 40).apply {
+            validForDependencyType({
                 toolTipText = "Maven local repository path (writable directory)"
-                border = BorderFactory.createCompoundBorder(
-                    JBUI.Borders.customLine(JBColor.border(), 1),
-                    JBUI.Borders.empty(2)
-                )
-                document.addDocumentListener(object : javax.swing.event.DocumentListener {
-                    override fun insertUpdate(e: javax.swing.event.DocumentEvent) = updateButtonState()
-                    override fun removeUpdate(e: javax.swing.event.DocumentEvent) = updateButtonState()
-                    override fun changedUpdate(e: javax.swing.event.DocumentEvent) = updateButtonState()
-                    private fun updateButtonState() {
-                        val changed = text != currentRepoPath
-                        refreshButton.isEnabled = changed // 使用外部作用域的refreshButton
-                        previewButton.isEnabled = !changed
-                        cleanButton.isEnabled = !changed && previewModel.getSelectedItems().isNotEmpty()
-                    }
-                })
-            }
+            } , arrayOf(DependencyType.MAVEN))
+            validForDependencyType({
+                toolTipText = "Gradle local repository path (writable directory)"
+            } , arrayOf(DependencyType.GRADLE))
+            border = BorderFactory.createCompoundBorder(
+                JBUI.Borders.customLine(JBColor.border(), 1),
+                JBUI.Borders.empty(2)
+            )
+            document.addDocumentListener(object : javax.swing.event.DocumentListener {
+                override fun insertUpdate(e: javax.swing.event.DocumentEvent) = updateButtonState()
+                override fun removeUpdate(e: javax.swing.event.DocumentEvent) = updateButtonState()
+                override fun changedUpdate(e: javax.swing.event.DocumentEvent) = updateButtonState()
+                private fun updateButtonState() {
+                    val changed = text != currentRepoPath
+                    refreshButton.isEnabled = changed // 使用外部作用域的refreshButton
+                    previewButton.isEnabled = !changed
+                    cleanButton.isEnabled = !changed && previewModel.getSelectedItems().isNotEmpty()
+                }
+            })
+        }
 
-            cleanButton = JButton("Clean Selected").apply {
-                isEnabled = false
-                addActionListener { performCleanup() }
-            }
-            refreshButton = JButton("Refresh").apply { // 初始化已声明的按钮
-                isEnabled = false
-                addActionListener {
-                    try {
-                        val newPath = if (pathField.text.isBlank()) {
-                            // 当输入框为空时，获取系统默认路径
-                            val defaultPath = mavenService.getLocalRepository()
-                            mavenService.updateLocalRepository(defaultPath)
-                            defaultPath
-                        } else {
-                            pathField.text
-                        }
-                        // 更新当前路径和输入框显示
-                        currentRepoPath = newPath
-                        pathField.text = newPath
-                        mavenService.updateLocalRepository(newPath)
-                        pathStatusLabel.text = ""
-                        isEnabled = false
-                        previewButton.isEnabled = true
-                    } catch (e: Exception) {
-                        pathStatusLabel.text = "Invalid path: ${e.message}"
-                        previewButton.isEnabled = false
-                        cleanButton.isEnabled = false
+        cleanButton = JButton("Clean Selected").apply {
+            isEnabled = false
+            addActionListener { performCleanup(configService) }
+        }
+        refreshButton = JButton("Refresh").apply { // 初始化已声明的按钮
+            isEnabled = false
+            addActionListener {
+                try {
+                    val newPath = if (pathField.text.isBlank()) {
+                        // 当输入框为空时，获取系统默认路径
+                        val defaultPath = configService.getLocalRepository(true)
+                        configService.updateLocalRepository(defaultPath)
+                        defaultPath
+                    } else {
+                        pathField.text
                     }
+                    // 更新当前路径和输入框显示
+                    currentRepoPath = newPath
+                    pathField.text = newPath
+                    configService.updateLocalRepository(newPath)
+                    pathStatusLabel.text = ""
+                    isEnabled = false
+                    previewButton.isEnabled = true
+                } catch (e: Exception) {
+                    pathStatusLabel.text = "Invalid path: ${e.message}"
+                    previewButton.isEnabled = false
+                    cleanButton.isEnabled = false
                 }
             }
-            val repoPanel = JPanel().apply {
-                layout = BoxLayout(this, BoxLayout.X_AXIS)
-                alignmentX = Component.LEFT_ALIGNMENT
-                add(JLabel("Maven repository: "))
-                add(Box.createHorizontalStrut(5))
-                add(pathField.apply {
-                    maximumSize = Dimension(Int.MAX_VALUE, preferredSize.height) // 允许横向扩展
-                })
-                add(Box.createHorizontalStrut(5))
-                add(refreshButton)
-            }
-            val filterPanel = JPanel().apply {
-                layout = BoxLayout(this, BoxLayout.X_AXIS)
-                alignmentX = Component.LEFT_ALIGNMENT
-                add(JLabel("Choose:"))
-                add(Box.createHorizontalStrut(5)) // 添加间隔
-                add(JCheckBox("SNAPSHOT").apply {
-                    snapshotCheckBox = this  // 初始化复选框引用
-                    toolTipText = "Include SNAPSHOT packages"
-                })
-                add(Box.createHorizontalStrut(20)) // 加大间隔
-                add(JLabel("Choose [Group:Artifact]:"))
-                add(Box.createHorizontalStrut(5))
-                add(JTextField(15).apply {
-                    groupArtifactField = this  // 初始化输入框引用
-                    toolTipText = "Format: groupId:artifactId or groupId"
-                })
-            }
-            val buttonPanel = JPanel().apply {
-                layout = BoxLayout(this, BoxLayout.X_AXIS)
-                alignmentX = Component.LEFT_ALIGNMENT
-                add(previewButton)
-                add(Box.createHorizontalStrut(10))
-                add(cleanButton)
-                add(Box.createHorizontalGlue())
-            }
-
-            controlPanel.apply {
-                add(repoPanel)
-                add(Box.createVerticalStrut(5))
-                add(pathStatusLabel)
-                add(Box.createVerticalStrut(10))
-                add(filterPanel)
-                add(Box.createVerticalStrut(10))
-                add(buttonPanel)
-                add(Box.createVerticalStrut(5))
-                add(progressBar.apply {
-                    alignmentX = Component.LEFT_ALIGNMENT
-                    isVisible = false
-                })
-                add(Box.createVerticalStrut(5))
-                add(statusLabel.apply {
-                    alignmentX = Component.LEFT_ALIGNMENT
-                })
-            }
-
-            add(controlPanel, BorderLayout.NORTH)
-
-            // Table panel
-            val tablePanel = JPanel(BorderLayout()).apply {
-                border = JBUI.Borders.empty(5)
-                add(JBScrollPane(previewTable).apply {
-                    preferredSize = Dimension(preferredSize.width, 300) // 固定初始高度
-                }, BorderLayout.CENTER)
-            }
-            add(tablePanel, BorderLayout.CENTER)
         }
+        val repoPanel = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.X_AXIS)
+            alignmentX = Component.LEFT_ALIGNMENT
+            validForDependencyType({add(JLabel("Maven repository: "))}, arrayOf(DependencyType.MAVEN))
+            validForDependencyType({add(JLabel("Gradle repository: "))}, arrayOf(DependencyType.GRADLE))
+            add(Box.createHorizontalStrut(5))
+            add(pathField.apply {
+                maximumSize = Dimension(Int.MAX_VALUE, preferredSize.height) // 允许横向扩展
+            })
+            add(Box.createHorizontalStrut(5))
+            add(refreshButton)
+        }
+        val filterPanel = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.X_AXIS)
+            alignmentX = Component.LEFT_ALIGNMENT
+            add(JLabel("Choose:"))
+            add(Box.createHorizontalStrut(5)) // 添加间隔
+            add(JCheckBox("SNAPSHOT").apply {
+                snapshotCheckBox = this  // 初始化复选框引用
+                toolTipText = "Include SNAPSHOT packages"
+            })
+            add(Box.createHorizontalStrut(20)) // 加大间隔
+            add(JLabel("Choose [Group:Artifact]:"))
+            add(Box.createHorizontalStrut(5))
+            add(JTextField(15).apply {
+                groupArtifactField = this  // 初始化输入框引用
+                toolTipText = "Format: groupId:artifactId or groupId"
+            })
+        }
+        val buttonPanel = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.X_AXIS)
+            alignmentX = Component.LEFT_ALIGNMENT
+            add(previewButton)
+            add(Box.createHorizontalStrut(10))
+            add(cleanButton)
+            add(Box.createHorizontalGlue())
+        }
+
+        controlPanel.apply {
+            add(repoPanel)
+            add(Box.createVerticalStrut(5))
+            add(pathStatusLabel)
+            add(Box.createVerticalStrut(10))
+            add(filterPanel)
+            add(Box.createVerticalStrut(10))
+            add(buttonPanel)
+            add(Box.createVerticalStrut(5))
+            add(progressBar.apply {
+                alignmentX = Component.LEFT_ALIGNMENT
+                isVisible = false
+            })
+            add(Box.createVerticalStrut(5))
+            add(statusLabel.apply {
+                alignmentX = Component.LEFT_ALIGNMENT
+            })
+        }
+
+        add(controlPanel, BorderLayout.NORTH)
+
+        // Table panel
+        val tablePanel = JPanel(BorderLayout()).apply {
+            border = JBUI.Borders.empty(5)
+            add(JBScrollPane(previewTable).apply {
+                preferredSize = Dimension(preferredSize.width, 300) // 固定初始高度
+            }, BorderLayout.CENTER)
+        }
+        add(tablePanel, BorderLayout.CENTER)
     }
 
-    private fun loadPreview() {
+    private fun loadPreview(configService: IConfigService) {
         progressBar.isVisible = true
         progressBar.isIndeterminate = true
         statusLabel.text = "Loading preview..."
 
         SwingUtilities.invokeLater {
-            when (val service = MavenConfigService()) {
-                is MavenConfigService -> {
-                    currentPreview = service.previewCleanup(
-                        // 添加参数传递
-                        includeSnapshot = snapshotCheckBox.isSelected,
-                        groupArtifact = groupArtifactField.text.takeIf { it.isNotEmpty() }
-                    )
-                    previewModel.setData(currentPreview?.previewItems ?: emptyList())
-                    headerCheckBox.isSelected = false
-                    updateStatus()
-                }
-            }
+            currentPreview = configService.previewCleanup(
+                // 添加参数传递
+                includeSnapshot = snapshotCheckBox.isSelected,
+                groupArtifact = groupArtifactField.text.takeIf { it.isNotEmpty() }
+            )
+            previewModel.setData(currentPreview?.previewItems ?: emptyList())
+            headerCheckBox.isSelected = false
+            updateStatus()
 
             progressBar.isVisible = false
             previewTable.parent.parent.isVisible = true
         }
     }
 
-    private fun performCleanup() {
+    private fun performCleanup(configService: IConfigService) {
         val selectedItems = previewModel.getSelectedItems()
         if (selectedItems.isEmpty()) return
 
@@ -415,8 +426,7 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
         progressBar.isIndeterminate = false
         progressBar.value = 0
 
-        val service = MavenConfigService()
-        service.cleanupFailedDownloads(
+        configService.cleanupRepository(
             project = project,
             selectedItems = selectedItems,
             onProgress = { current, total ->
@@ -430,7 +440,7 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
                     progressBar.isVisible = false
                     val success = results.count { it.success }
                     statusLabel.text = "Cleanup complete: $success/${results.size} files cleaned"
-                    loadPreview() // Refresh the preview
+                    loadPreview(configService) // Refresh the preview
                 }
             }
         )

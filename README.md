@@ -12,7 +12,7 @@ Professional IDE plugin for managing project dependencies and cleaning unused ar
 ✅ Support deleting failed Maven downloads  
 ✅ Support deleting SNAPSHOT packages and specified groupId/artifactId  
 ✅ Multi-threaded cleanup with progress monitoring  
-✅ Cross-platform support
+✅ Cross-platform support  
 
 [查看中文文档](README-CN.md)
 <!-- Plugin description end -->
@@ -25,7 +25,7 @@ Professional IDE plugin for managing project dependencies and cleaning unused ar
 
 - **Manual install:**  
   Download from [JetBrains Marketplace](https://plugins.jetbrains.com/plugin/MARKETPLACE_ID)  
-  or [GitHub Releases](https://github.com/zijing66/dependency-manager/releases)
+  or [GitHub Releases](https://github.com/zijing66/dependency-manager/releases)  
 
 ---
 
