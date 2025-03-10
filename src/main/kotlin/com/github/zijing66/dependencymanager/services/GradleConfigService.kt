@@ -12,7 +12,7 @@ import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.Task
 import com.intellij.openapi.ui.Messages
 
-@Service
+@Service(Service.Level.PROJECT)
 class GradleConfigService(project: Project) : AbstractConfigService(project) {
 
     private var customRepoPath: String? = null
@@ -20,20 +20,22 @@ class GradleConfigService(project: Project) : AbstractConfigService(project) {
     private fun resolveGradleUserHome(): String {
         // 从gradle-wrapper.properties解析GRADLE_USER_HOME
         val wrapperFile = findGradleWrapper()
-        val properties = Properties().apply { wrapperFile?.inputStream()?.use(::load) }
-        var distributionBase = properties.getProperty("distributionBase")
-        
-        if (distributionBase == "GRADLE_USER_HOME") {
-            distributionBase = System.getenv("GRADLE_USER_HOME") ?: "${System.getProperty("user.home")}/.gradle"
+        var distributionBase = System.getenv("GRADLE_USER_HOME") ?: "${System.getProperty("user.home")}/.gradle"
+        if (wrapperFile != null) {
+            val properties = Properties().apply { wrapperFile.inputStream().use(::load) }
+            val tempDistributionBase = properties.getProperty("distributionBase")
+            if (tempDistributionBase != "GRADLE_USER_HOME") {
+                distributionBase = tempDistributionBase
+            }
         }
         return distributionBase
     }
 
-    private fun findGradleWrapper(): File {
+    private fun findGradleWrapper(): File? {
         // 获取项目的gradle-wrapper.properties文件路径
         val basePath = project.basePath ?: throw RuntimeException("Project base path is null")
         val wrapperFile = File("$basePath/gradle/wrapper/gradle-wrapper.properties")
-        return if (wrapperFile.exists()) wrapperFile else throw RuntimeException("gradle-wrapper.properties not found")
+        return if (wrapperFile.exists()) wrapperFile else null
     }
 
     override fun getLocalRepository(refresh: Boolean): String {

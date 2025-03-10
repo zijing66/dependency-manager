@@ -7,7 +7,7 @@ import com.intellij.openapi.project.Project
 
 interface IConfigService {
 
-    fun getLocalRepository(fresh: Boolean): String
+    fun getLocalRepository(refresh: Boolean): String
 
     fun updateLocalRepository(newPath: String)
 

@@ -2,6 +2,18 @@
 
 [English Change Log](CHANGELOG.md)
 
+## [1.0.1]
+
+### 新增
+
+- 支持Gradle包管理
+- 支持切换maven和gradle
+- 优化界面样式
+
+### 修复
+
+- 修复若干问题
+
 ## [1.0.0]
 
 ### 新增

@@ -11,7 +11,7 @@ import com.intellij.openapi.project.Project
 import java.io.File
 import javax.xml.parsers.DocumentBuilderFactory
 
-@Service
+@Service(Service.Level.PROJECT)
 class MavenConfigService(project: Project) : AbstractConfigService(project) {
 
     // 添加自定义仓库路径存储

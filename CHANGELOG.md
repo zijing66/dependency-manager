@@ -4,6 +4,18 @@
 
 [中文更新日志](CHANGELOG-CN.md)
 
+## [1.0.1]
+
+### Added
+
+- Support Gradle package management
+- Support switching between Maven and Gradle
+- Optimize UI styling
+
+### Fixed
+
+- Fixed multiple issues
+
 ## [1.0.0]
 
 ### Added

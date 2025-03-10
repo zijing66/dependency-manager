@@ -5,9 +5,9 @@
 [![Downloads](https://img.shields.io/jetbrains/plugin/d/26753-dependency-manager.svg)](https://plugins.jetbrains.com/plugin/MARKETPLACE_ID)
 
 <!-- Plugin description -->
-Professional IDE plugin for managing project dependencies and cleaning unused artifacts. Key features:
+IDE plugin for cleaning project dependencies. Key features:
 
-✅ Automatic dependency type detection (Maven/Gradle)  
+✅ Automatic dependency type detection (Maven/Gradle...)
 ✅ Visual preview of cleanup candidates  
 ✅ Support deleting failed Maven downloads  
 ✅ Support deleting SNAPSHOT packages and specified groupId/artifactId  
@@ -24,7 +24,7 @@ Professional IDE plugin for managing project dependencies and cleaning unused ar
   <kbd>Search for "Dependency Manager"</kbd> > <kbd>Install</kbd>
 
 - **Manual install:**  
-  Download from [JetBrains Marketplace](https://plugins.jetbrains.com/plugin/MARKETPLACE_ID)  
+  Download from [JetBrains Marketplace](https://plugins.jetbrains.com/plugin/26753-dependency-manager)
   or [GitHub Releases](https://github.com/zijing66/dependency-manager/releases)  
 
 ---

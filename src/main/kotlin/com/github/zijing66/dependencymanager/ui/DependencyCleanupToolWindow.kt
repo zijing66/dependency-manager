@@ -255,6 +255,15 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
         val dependencyType = detector.detectDependencyType(project)
 
         updateUIComponents(controlPanel, dependencyType)
+
+        // Table panel
+        val tablePanel = JPanel(BorderLayout()).apply {
+            border = JBUI.Borders.empty(5)
+            add(JBScrollPane(previewTable).apply {
+                preferredSize = Dimension(preferredSize.width, 300) // 固定初始高度
+            }, BorderLayout.CENTER)
+        }
+        add(tablePanel, BorderLayout.CENTER)
     }
 
     private fun updateUIComponents(controlPanel: JPanel, chosenDependencyType : DependencyType) {
@@ -264,6 +273,7 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
         // 创建一个水平布局的面板
         val topRowPanel = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.X_AXIS)
+            alignmentX = Component.LEFT_ALIGNMENT  // 确保面板左对齐
             add(JLabel("Dependency manager: $chosenDependencyType").apply {
                 alignmentX = Component.LEFT_ALIGNMENT
             })
@@ -272,14 +282,16 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
             add(JLabel("Switch to: ").apply {
                 alignmentX = Component.LEFT_ALIGNMENT
             })
-            val dependencyTypeList = DependencyType.safeValues().filter { it != DependencyType.UNKNOWN && it != chosenDependencyType }.toTypedArray()
+            val dependencyTypeList = DependencyType.values().filter { it != DependencyType.UNKNOWN && it != chosenDependencyType }.toTypedArray()
             val dependencyTypeComboBox = JComboBox(dependencyTypeList).apply {
+                alignmentX = Component.LEFT_ALIGNMENT  // 确保下拉框左对齐
                 addActionListener {
                     val dependencyType = selectedItem as DependencyType
                     updateUIComponents(controlPanel, dependencyType)
                 }
             }
             add(dependencyTypeComboBox)
+            add(Box.createHorizontalGlue())  // 添加水平弹性空间，确保组件靠左对齐
         }
 
         controlPanel.add(topRowPanel) // 将水平面板添加到控制面板
@@ -293,6 +305,7 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
         val pathStatusLabel = JLabel().apply {
             foreground = JBColor.RED
             font = font.deriveFont(font.size2D - 1f)
+            alignmentX = Component.LEFT_ALIGNMENT  // 确保标签左对齐
         }
 
         lateinit var refreshButton: JButton
@@ -358,8 +371,15 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
         val repoPanel = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.X_AXIS)
             alignmentX = Component.LEFT_ALIGNMENT
-            validForDependencyType({add(JLabel("Maven repository: "))}, arrayOf(DependencyType.MAVEN))
-            validForDependencyType({add(JLabel("Gradle repository: "))}, arrayOf(DependencyType.GRADLE))
+            
+            // 创建一个固定宽度的标签面板，确保标签对齐
+            val labelPanel = JPanel(BorderLayout()).apply {
+                preferredSize = Dimension(120, 25)  // 设置固定宽度
+                validForDependencyType({add(JLabel("Maven repository: "), BorderLayout.WEST)}, arrayOf(DependencyType.MAVEN))
+                validForDependencyType({add(JLabel("Gradle repository: "), BorderLayout.WEST)}, arrayOf(DependencyType.GRADLE))
+            }
+            add(labelPanel)
+            
             add(Box.createHorizontalStrut(5))
             add(pathField.apply {
                 maximumSize = Dimension(Int.MAX_VALUE, preferredSize.height) // 允许横向扩展
@@ -367,6 +387,7 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
             add(Box.createHorizontalStrut(5))
             add(refreshButton)
         }
+        
         val filterPanel = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.X_AXIS)
             alignmentX = Component.LEFT_ALIGNMENT
@@ -382,8 +403,11 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
             add(JTextField(15).apply {
                 groupArtifactField = this  // 初始化输入框引用
                 toolTipText = "Format: groupId:artifactId or groupId"
+                maximumSize = Dimension(200, preferredSize.height)  // 限制最大宽度
             })
+            add(Box.createHorizontalGlue())  // 添加水平弹性空间
         }
+        
         val buttonPanel = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.X_AXIS)
             alignmentX = Component.LEFT_ALIGNMENT
@@ -396,31 +420,48 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
         controlPanel.apply {
             add(repoPanel)
             add(Box.createVerticalStrut(5))
-            add(pathStatusLabel)
+            
+            // 为错误消息添加一个面板，保持与其他组件的对齐
+            val errorPanel = JPanel().apply {
+                layout = BoxLayout(this, BoxLayout.X_AXIS)
+                alignmentX = Component.LEFT_ALIGNMENT
+                add(Box.createRigidArea(Dimension(120, 0)))
+                add(pathStatusLabel)
+            }
+            add(errorPanel)
+            
             add(Box.createVerticalStrut(10))
             add(filterPanel)
             add(Box.createVerticalStrut(10))
             add(buttonPanel)
             add(Box.createVerticalStrut(5))
-            add(progressBar.apply {
+            
+            // 为进度条添加一个面板，保持与其他组件的对齐
+            val progressPanel = JPanel().apply {
+                layout = BoxLayout(this, BoxLayout.X_AXIS)
                 alignmentX = Component.LEFT_ALIGNMENT
-                isVisible = false
-            })
+                add(Box.createRigidArea(Dimension(120, 0)))
+                add(progressBar.apply {
+                    alignmentX = Component.LEFT_ALIGNMENT
+                    isVisible = false
+                    maximumSize = Dimension(Int.MAX_VALUE, preferredSize.height)  // 允许横向扩展
+                })
+            }
+            add(progressPanel)
+            
             add(Box.createVerticalStrut(5))
-            add(statusLabel.apply {
+            
+            // 为状态标签添加一个面板，保持与其他组件的对齐
+            val statusPanel = JPanel().apply {
+                layout = BoxLayout(this, BoxLayout.X_AXIS)
                 alignmentX = Component.LEFT_ALIGNMENT
-            })
+                add(Box.createRigidArea(Dimension(120, 0)))
+                add(statusLabel.apply {
+                    alignmentX = Component.LEFT_ALIGNMENT
+                })
+            }
+            add(statusPanel)
         }
-
-        // Table panel
-        val tablePanel = JPanel(BorderLayout()).apply {
-            border = JBUI.Borders.empty(5)
-            add(JBScrollPane(previewTable).apply {
-                preferredSize = Dimension(preferredSize.width, 300) // 固定初始高度
-            }, BorderLayout.CENTER)
-        }
-        remove(tablePanel)
-        add(tablePanel, BorderLayout.CENTER)
 
         // 刷新面板
         controlPanel.revalidate()
