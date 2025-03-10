@@ -11,7 +11,7 @@
         <toolWindow 
             id="DependencyManager"
             secondary="false"
-            icon="AllIcons.General.Modified" 
+            icon="icons/pluginIcon.svg"
             anchor="right"
             factoryClass="com.github.zijing66.dependencymanager.ui.DependencyCleanupToolWindow"/>
     </extensions>
@@ -26,7 +26,7 @@
                     class="com.github.zijing66.dependencymanager.actions.CleanupDependenciesAction"
                     text="Dependency Manager"
                     description="Manager Local Package Repository Tools"
-                    icon="AllIcons.General.Modified">
+                    icon="icons/pluginIcon.svg">
                 <keyboard-shortcut first-keystroke="control alt D" keymap="$default"/>
                 <keyboard-shortcut first-keystroke="meta alt D" keymap="Mac OS X"/>
                 <keyboard-shortcut first-keystroke="meta alt D" keymap="Mac OS X 10.5+"/>

@@ -14,7 +14,7 @@
 
 ### Fixed
 
-- Fixed multiple issues
+- Fixed some issues
 
 ## [1.0.0]
 

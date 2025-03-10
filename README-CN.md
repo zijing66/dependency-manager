@@ -7,7 +7,7 @@
 <!-- Plugin description -->
 依赖清理插件，主要功能：
 
-✅ 自动识别项目依赖类型（Maven/Gradle/...）
+✅ 自动识别项目依赖类型（Maven/Gradle/...）  
 ✅ 可视化预览待清理依赖仓库包  
 ✅ 支持删除maven下载失败的包  
 ✅ 支持删除SNAPSHOT包和指定groupId与artifactId的包  
