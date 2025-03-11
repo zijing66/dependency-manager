@@ -51,6 +51,10 @@ private class PreviewTableModel : AbstractTableModel() {
         fireTableDataChanged()
     }
 
+    fun getItemAt(rowIndex: Int): CleanupPreview {
+        return data[rowIndex]
+    }
+
     fun getSelectedItems(): List<CleanupPreview> {
         return data.filter { it.selected }
     }
@@ -191,6 +195,31 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
                     if (header.columnAtPoint(e.point) == 0) {
                         headerCheckBox.isSelected = !headerCheckBox.isSelected
                         previewModel.setAllSelected(headerCheckBox.isSelected)
+                    }
+                }
+            })
+            // 添加双击事件处理
+            addMouseListener(object : java.awt.event.MouseAdapter() {
+                override fun mouseClicked(e: java.awt.event.MouseEvent) {
+                    if (e.clickCount == 2) { // 检查是否双击
+                        val row = rowAtPoint(e.point)
+                        val column = columnAtPoint(e.point)
+                        if (column == 1) { // 检查是否在Package Name列
+                            openExplorerForPackage(previewModel.getItemAt(row)) // 打开资源管理器
+                        }
+                    }
+                }
+            })
+
+            // 添加鼠标悬浮提示
+            addMouseMotionListener(object : java.awt.event.MouseMotionAdapter() {
+                override fun mouseMoved(e: java.awt.event.MouseEvent) {
+                    val row = rowAtPoint(e.point)
+                    val column = columnAtPoint(e.point)
+                    if (column == 1 && row >= 0) { // 检查是否在Package Name列
+                        toolTipText = "Double click to open Explorer"
+                    } else {
+                        toolTipText = null // 清除提示
                     }
                 }
             })
@@ -543,6 +572,21 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
             size < 1024 * 1024 -> "${df.format(size / 1024.0)} KB"
             size < 1024 * 1024 * 1024 -> "${df.format(size / (1024.0 * 1024.0))} MB"
             else -> "${df.format(size / (1024.0 * 1024.0 * 1024.0))} GB"
+        }
+    }
+
+    private fun openExplorerForPackage(item: CleanupPreview) {
+        // 根据包名获取路径并打开资源管理器
+        val path = item.path // 需要实现此方法以获取路径
+        val file = java.io.File(path)
+        if (file.exists() && file.isDirectory) {
+            // 使用系统命令打开资源管理器
+            val command = when {
+                System.getProperty("os.name").lowercase(Locale.getDefault()).contains("win") -> "explorer"
+                System.getProperty("os.name").lowercase(Locale.getDefault()).contains("mac") -> "open"
+                else -> "xdg-open" // Linux
+            }
+            Runtime.getRuntime().exec(arrayOf(command, file.path))
         }
     }
 }
