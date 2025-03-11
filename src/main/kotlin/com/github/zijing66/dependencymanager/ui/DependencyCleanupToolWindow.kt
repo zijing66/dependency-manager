@@ -108,15 +108,15 @@ private class PreviewTableModel : AbstractTableModel() {
 private class DependencyCleanupPanel(private val project: Project) : JPanel(BorderLayout()) {
     private val previewTable: JBTable
     private val previewModel: PreviewTableModel
-    private val progressBar: JProgressBar
-    private val statusLabel: JLabel
+
     private var currentPreview: CleanupSummary? = null
     private val headerCheckBox = JCheckBox()
     private lateinit var configService: IConfigService
     private lateinit var currentDependencyType: DependencyType
     private lateinit var snapshotCheckBox: JCheckBox
     private lateinit var groupArtifactField: JTextField
-    private lateinit var cleanButton: JButton
+    private lateinit var progressBar: JProgressBar
+    private lateinit var statusLabel: JLabel
 
     init {
         previewModel = PreviewTableModel()
@@ -195,14 +195,6 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
                 }
             })
         }
-        // 在表格模型添加监听器
-        previewModel.addTableModelListener {
-            val hasSelection = previewModel.getSelectedItems().isNotEmpty()
-            cleanButton.isEnabled = hasSelection
-        }
-        progressBar = JProgressBar()
-        statusLabel = JLabel()
-
         setupUI()
     }
 
@@ -270,6 +262,9 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
         currentDependencyType = chosenDependencyType
         // 清空当前组件
         controlPanel.removeAll()
+        // 清空预览数据
+        previewModel.setData(emptyList())
+
         // 创建一个水平布局的面板
         val topRowPanel = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.X_AXIS)
@@ -297,7 +292,12 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
         controlPanel.add(topRowPanel) // 将水平面板添加到控制面板
 
         // 初始化配置服务
-        updateConfigService(chosenDependencyType)
+        try {
+            updateConfigService(chosenDependencyType)
+        } catch (e: Exception) {
+            LOG.info(String.format("Failed to initialize config service: {}", e.message))
+            return
+        }
 
         // 添加仓库路径显示
         var currentRepoPath = configService.getLocalRepository(false)
@@ -312,6 +312,11 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
 
         val previewButton = JButton("Preview Cleanup").apply {
             addActionListener { loadPreview(configService) }
+        }
+
+        val cleanButton = JButton("Clean Selected").apply {
+            isEnabled = false
+            addActionListener { performCleanup(configService) }
         }
 
         val pathField = JTextField(currentRepoPath, 40).apply {
@@ -338,10 +343,6 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
             })
         }
 
-        cleanButton = JButton("Clean Selected").apply {
-            isEnabled = false
-            addActionListener { performCleanup(configService) }
-        }
         refreshButton = JButton("Refresh").apply { // 初始化已声明的按钮
             isEnabled = false
             addActionListener {
@@ -435,12 +436,12 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
             add(Box.createVerticalStrut(10))
             add(buttonPanel)
             add(Box.createVerticalStrut(5))
-            
+
+            progressBar = JProgressBar()
             // 为进度条添加一个面板，保持与其他组件的对齐
             val progressPanel = JPanel().apply {
                 layout = BoxLayout(this, BoxLayout.X_AXIS)
                 alignmentX = Component.LEFT_ALIGNMENT
-                add(Box.createRigidArea(Dimension(120, 0)))
                 add(progressBar.apply {
                     alignmentX = Component.LEFT_ALIGNMENT
                     isVisible = false
@@ -450,19 +451,23 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
             add(progressPanel)
             
             add(Box.createVerticalStrut(5))
-            
+
+            statusLabel = JLabel()
             // 为状态标签添加一个面板，保持与其他组件的对齐
             val statusPanel = JPanel().apply {
                 layout = BoxLayout(this, BoxLayout.X_AXIS)
                 alignmentX = Component.LEFT_ALIGNMENT
-                add(Box.createRigidArea(Dimension(120, 0)))
                 add(statusLabel.apply {
                     alignmentX = Component.LEFT_ALIGNMENT
                 })
             }
             add(statusPanel)
         }
-
+        // 在表格模型添加监听器
+        previewModel.addTableModelListener {
+            val hasSelection = previewModel.getSelectedItems().isNotEmpty()
+            cleanButton.isEnabled = hasSelection
+        }
         // 刷新面板
         controlPanel.revalidate()
         controlPanel.repaint()
