@@ -4,6 +4,25 @@
 
 [中文更新日志](CHANGELOG-CN.md)
 
+## [1.0.2]
+
+### Added
+- Add double-click to open explorer feature in dependency cleanup tool
+  - Double-click package name to open local storage location
+  - Support Windows/macOS/Linux
+- Add configuration service initialization error handling
+
+### Improved
+- Refactor dependency cleanup tool UI layout
+  - Redesign progress bar and status label layout
+  - Optimize component initialization sequence
+- Enhance configuration service error handling
+
+### Fixed
+- Fix UI scaling issues on high-DPI displays
+- Fix null pointer exception during config initialization
+
+
 ## [1.0.1]
 
 ### Added
