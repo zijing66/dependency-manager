@@ -4,6 +4,17 @@
 
 [中文更新日志](CHANGELOG-CN.md)
 
+## [1.0.3]
+
+### Added
+- Add `Match Type` display in field presentation
+
+### Improved
+- Optimize lookup efficiency
+
+### Fixed
+- Fix Gradle package lookup exceptions
+
 ## [1.0.2]
 
 ### Added

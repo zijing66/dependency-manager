@@ -7,7 +7,8 @@ data class CleanupPreview(
     val lastModified: Long,
     val dependencyType: DependencyType,
     var selected: Boolean = true,
-    val relativePath: String
+    val relativePath: String,
+    val matchType: String
 )
 
 data class CleanupSummary(

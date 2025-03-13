@@ -69,55 +69,69 @@ class GradleConfigService(project: Project) : AbstractConfigService(project) {
     }
 
     private fun scanRepository(
-        dir: File, onDirFound: (File) -> Unit, includeSnapshot: Boolean = false, groupArtifact: String? = null
+        dir: File, onDirFound: (File, String) -> Unit, includeSnapshot: Boolean = false, groupArtifact: String? = null
     ) {
-        val processedDirs = mutableSetOf<String>()
-        val targetGroupArtifact = groupArtifact?.split(":")?.map { it.replace('.', '/') }
-        val dirsToProcess = mutableSetOf<File>()
+        val targetGroupArtifact = groupArtifact?.split(":")
 
-        when {
-            groupArtifact != null && targetGroupArtifact != null ->
-                scanByGroupArtifact(dir, targetGroupArtifact, dirsToProcess)
-            includeSnapshot ->
-                scanForSnapshot(dir, dirsToProcess)
-            else -> {
-                // 在IDEA中提示用户
-                Messages.showErrorDialog(
-                    project,
-                    "Please choose Snapshot or input Group/Artifact",
-                    "Input Error"
-                )
-            }
+        if (!includeSnapshot && groupArtifact == null) {
+            // 在IDEA中提示用户
+            Messages.showErrorDialog(
+                project,
+                "Please choose Snapshot or input Group/Artifact",
+                "Input Error"
+            )
+            return
         }
 
-        dirsToProcess.forEach { versionDir ->
-            // 如果目录已经处理过，跳过
-            if (!processedDirs.add(versionDir.absolutePath)) return@forEach
-            if (!isValidGradleVersionDir(versionDir)) return@forEach
+        dir.walk().forEach { versionDir ->
+            // 验证这是一个有效的Maven依赖版本目录
+            if (!isValidGradleVersionDir(versionDir)) {
+                return@forEach
+            }
 
             val relativePath = versionDir.relativeTo(dir).path.replace('\\', '/')
             val pathComponents = relativePath.split('/')
+
+            // 检查是否是SNAPSHOT目录
             val isSnapshotDir = pathComponents.lastOrNull()?.contains("SNAPSHOT") == true
 
+            // 检查是否匹配指定的group/artifact
+            val isTargetGroupArtifact = when (targetGroupArtifact?.size) {
+                2 -> {
+                    // 完整的groupId:artifactId
+                    val (group, artifact) = targetGroupArtifact
+                    val artifactDir = versionDir.parentFile
+                    val groupPath = artifactDir.parentFile
+                    groupPath.name == group && artifactDir.name == artifact
+                }
+                1 -> {
+                    // 只有groupId，可能是部分输入
+                    val group = targetGroupArtifact[0]
+                    relativePath.startsWith(group)
+                }
+                else -> {
+                    true
+                }
+            }
+            // 筛选逻辑
             val shouldInclude = when {
+                // 如果是SNAPSHOT但目录不包含SNAPSHOT，则排除
                 includeSnapshot && !isSnapshotDir -> false
+                // 如果指定了groupId:artifactId但不匹配，则排除
+                groupArtifact != null && !isTargetGroupArtifact -> false
+                // 其他情况都包含
                 else -> true
             }
+            // 设置匹配类型
+            val matchType = when {
+                groupArtifact != null && isTargetGroupArtifact -> "matched"
+                includeSnapshot && isSnapshotDir -> "snapshot"
+                else -> "invalid"
+            }
 
-            if (shouldInclude) onDirFound(versionDir)
-        }
-    }
-
-    private fun isTargetGroupArtifact(versionDir: File, target: List<String>): Boolean {
-        val parentDirs = versionDir.parentFile?.parentFile?.relativeTo(versionDir.parentFile?.parentFile?.parentFile!!)?.path
-            ?.replace('\\', '/')?.split('/') ?: return false
-
-        return when (target.size) {
-            2 -> parentDirs.size >= 2 && 
-                 parentDirs[parentDirs.size - 2] == target[0] && 
-                 parentDirs.last() == target[1]
-            1 -> parentDirs.any { it.contains(target[0]) }
-            else -> false
+            if (shouldInclude) {
+                onDirFound(versionDir, matchType)
+            }
         }
     }
 
@@ -150,7 +164,7 @@ class GradleConfigService(project: Project) : AbstractConfigService(project) {
         val previewItems = mutableListOf<CleanupPreview>()
         var totalSize = 0L
 
-        scanRepository(repoDir, { versionDir ->
+        scanRepository(repoDir, { versionDir, matchType ->
             val dirSize = calculateDirSize(versionDir)
             val (packageName, version, relativePath) = extractPackageInfo(versionDir)
 
@@ -161,7 +175,8 @@ class GradleConfigService(project: Project) : AbstractConfigService(project) {
                     fileSize = dirSize,
                     lastModified = versionDir.lastModified(),
                     dependencyType = DependencyType.GRADLE,
-                    relativePath = relativePath
+                    relativePath = relativePath,
+                    matchType = matchType
                 )
             )
             totalSize += dirSize
@@ -250,103 +265,4 @@ class GradleConfigService(project: Project) : AbstractConfigService(project) {
         }
     }
 
-    private fun scanByGroupArtifact(dir: File, targetGroupArtifact: List<String>, dirsToProcess: MutableSet<File>) {
-        when (targetGroupArtifact.size) {
-            2 -> {
-                // 完整的groupId:artifactId
-                val (group, artifact) = targetGroupArtifact
-                if (group.isNotEmpty() && artifact.isNotEmpty()) {
-                    val targetDir = File(dir, "$group${File.separator}$artifact")
-                    if (targetDir.exists() && targetDir.isDirectory) {
-                        // 只添加包含jar或pom文件的版本目录
-                        targetDir.listFiles()?.filter { it.isDirectory }?.forEach { versionDir ->
-                            if (isValidGradleVersionDir(versionDir)) {
-                                dirsToProcess.add(versionDir)
-                            }
-                        }
-                    }
-                }
-            }
-
-            1 -> {
-                // 只有groupId，可能是部分输入
-                val group = targetGroupArtifact[0]
-                if (group.isNotEmpty()) {
-                    // 遍历目录，查找以group开头的文件夹
-                    dir.listFiles()?.filter { it.isDirectory && it.name.startsWith(group) }?.forEach { groupDir ->
-                        // 对于每个匹配的groupId目录，递归查找所有子目录下的Gradle版本目录
-                        findAllGradleVersionDirs(groupDir, dirsToProcess)
-                    }
-                }
-            }
-        }
-    }
-
-    private fun scanForSnapshot(dir: File, dirsToProcess: MutableSet<File>) {
-        // 再查找SNAPSHOT目录，但使用更高效的方式
-        dir.walk().filter {
-            it.isDirectory && it.name.contains("SNAPSHOT")
-                    // 确保是版本目录，而不是中间目录
-                    && isValidGradleVersionDir(it)
-        }.forEach { dirsToProcess.add(it) }
-    }
-
-    private fun findMatchingGroupDirectories(baseDir: File, groupParts: List<String>): List<File> {
-        // 如果是空列表，返回空结果
-        if (groupParts.isEmpty()) return emptyList()
-
-        // 递归查找匹配的目录
-        return findMatchingDirectoriesRecursive(baseDir, groupParts, 0)
-    }
-
-    private fun findMatchingDirectoriesRecursive(currentDir: File, parts: List<String>, index: Int): List<File> {
-        // 如果已经处理完所有部分，返回当前目录
-        if (index >= parts.size) {
-            return listOf(currentDir)
-        }
-
-        val currentPart = parts[index]
-        val results = mutableListOf<File>()
-
-        // 获取当前目录下的所有子目录
-        val subDirs = currentDir.listFiles()?.filter { it.isDirectory } ?: return emptyList()
-
-        // 查找匹配当前部分的目录
-        val matchingDirs = subDirs.filter {
-            // 如果是最后一部分，使用前缀匹配；否则使用精确匹配
-            if (index == parts.size - 1) {
-                it.name.startsWith(currentPart)
-            } else {
-                it.name == currentPart
-            }
-        }
-
-        // 对于每个匹配的目录，继续递归查找
-        for (dir in matchingDirs) {
-            if (index == parts.size - 1) {
-                // 如果是最后一部分，添加当前目录
-                results.add(dir)
-            } else {
-                // 否则继续递归
-                results.addAll(findMatchingDirectoriesRecursive(dir, parts, index + 1))
-            }
-        }
-
-        return results
-    }
-
-    private fun findAllGradleVersionDirs(dir: File, result: MutableSet<File>) {
-        if (!dir.isDirectory) return
-
-        // 检查当前目录是否是有效的Gradle版本目录
-        if (isValidGradleVersionDir(dir)) {
-            result.add(dir)
-            return // 如果是版本目录，不再向下递归
-        }
-
-        // 递归查找子目录
-        dir.listFiles()?.filter { it.isDirectory }?.forEach { subDir ->
-            findAllGradleVersionDirs(subDir, result)
-        }
-    }
 }

@@ -41,7 +41,7 @@ class DependencyCleanupToolWindow : ToolWindowFactory {
 }
 
 private class PreviewTableModel : AbstractTableModel() {
-    private val columns = arrayOf("", "Package Name", "Size", "Last Modified")
+    private val columns = arrayOf("", "Package Name", "Match Type", "Size", "Last Modified")
 
     private var data: List<CleanupPreview> = emptyList()
 
@@ -89,8 +89,9 @@ private class PreviewTableModel : AbstractTableModel() {
         return when (columnIndex) {
             0 -> item.selected
             1 -> item.packageName
-            2 -> formatFileSize(item.fileSize)
-            3 -> formatDate(item.lastModified)
+            2 -> item.matchType
+            3 -> formatFileSize(item.fileSize)
+            4 -> formatDate(item.lastModified)
             else -> ""
         }
     }
@@ -135,10 +136,12 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
                 getColumn(0).preferredWidth = 30 // Checkbox
                 getColumn(0).maxWidth = 30
                 getColumn(1).preferredWidth = 300 // Package Name
-                getColumn(2).preferredWidth = 100 // Size
+                getColumn(2).preferredWidth = 100 // Match Type
                 getColumn(2).maxWidth = 100
-                getColumn(3).preferredWidth = 150 // Last Modified
-                getColumn(3).maxWidth = 150
+                getColumn(3).preferredWidth = 100 // Size
+                getColumn(3).maxWidth = 100
+                getColumn(4).preferredWidth = 150 // Last Modified
+                getColumn(4).maxWidth = 150
             }
             // 添加单元格编辑器
             columnModel.getColumn(0).cellEditor = object : DefaultCellEditor(JCheckBox()) {

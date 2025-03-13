@@ -64,33 +64,32 @@ class MavenConfigService(project: Project) : AbstractConfigService(project) {
         }
     }
 
-    // 修改扫描方法，使用目录级别的去重和性能优化
-    private fun scanRepository(
-        dir: File, onDirFound: (File) -> Unit, includeSnapshot: Boolean = false, groupArtifact: String? = null
-    ) {
-        val processedDirs = mutableSetOf<String>() // 防止重复处理目录
-        val targetGroupArtifact = groupArtifact?.split(":")?.map { it.replace('.', '/', true) }
-        val dirsToProcess = mutableSetOf<File>() // 存储需要处理的目录
+    // 检查是否是有效的Maven版本目录
+    private fun isValidMavenVersionDir(dir: File): Boolean {
+        // 检查是否是目录
+        if (!dir.isDirectory) return false
 
-        // 性能优化：根据筛选条件决定扫描策略
-        if (groupArtifact != null && targetGroupArtifact != null) {
-            // 如果指定了groupId:artifactId，先尝试直接定位到相应目录
-            scanByGroupArtifact(dir, targetGroupArtifact, dirsToProcess)
-        } else if (includeSnapshot) {
-            // 如果需要包含SNAPSHOT，使用更高效的方式查找
-            scanForSnapshotAndFailedDownloads(dir, dirsToProcess)
-        } else {
-            // 只查找失效包
-            scanForFailedDownloadsOnly(dir, dirsToProcess)
+        val files = dir.listFiles() ?: emptyArray()
+
+        // 检查是否包含jar或pom文件，或者lastUpdated文件
+        val hasValidFiles = files.any { file ->
+            file.isFile && (file.name.endsWith(".jar") || file.name.endsWith(".pom") || file.name.endsWith(".jar.lastUpdated") || file.name.endsWith(".pom.lastUpdated"))
         }
 
-        // 处理所有收集到的目录
-        dirsToProcess.forEach { versionDir ->
-            // 如果目录已经处理过，跳过
-            if (!processedDirs.add(versionDir.absolutePath)) {
-                return@forEach
-            }
+        // 检查目录结构：至少应该有两级父目录（groupId/artifactId/version）
+        val hasValidStructure = dir.parentFile?.parentFile != null
 
+        return hasValidFiles && hasValidStructure
+    }
+
+    // 修改scanRepository方法，传递文件数组
+    private fun scanRepository(
+        dir: File, onDirFound: (File, String) -> Unit, includeSnapshot: Boolean = false, groupArtifact: String? = null
+    ) {
+        val targetGroupArtifact = groupArtifact?.split(":")?.map { it.replace('.', '/', true) }
+
+        // 使用单次遍历记录所有目录信息
+        dir.walk().forEach { versionDir ->
             // 验证这是一个有效的Maven依赖版本目录
             if (!isValidMavenVersionDir(versionDir)) {
                 return@forEach
@@ -124,16 +123,25 @@ class MavenConfigService(project: Project) : AbstractConfigService(project) {
 
             // 筛选逻辑
             val shouldInclude = when {
-                // 如果指定了groupId:artifactId但不匹配，则排除
-                !hasLastUpdated && groupArtifact != null && !isTargetGroupArtifact -> false
                 // 如果是SNAPSHOT但目录不包含SNAPSHOT，则排除
-                !hasLastUpdated && includeSnapshot && !isSnapshotDir -> false
-                // 其他情况都包含
+                includeSnapshot && !isSnapshotDir -> false
+                // 如果指定了groupId:artifactId但不匹配，则排除
+                groupArtifact != null && !isTargetGroupArtifact -> false
+                // 如果既不包含SNAPSHOT也不指定groupId:artifactId也不包含lastUpdated，则排除
+                !includeSnapshot && groupArtifact == null && !hasLastUpdated -> false
                 else -> true
             }
 
+            // 设置匹配类型
+            val matchType = when {
+                hasLastUpdated -> "invalid"
+                groupArtifact != null && isTargetGroupArtifact -> "matched"
+                includeSnapshot && isSnapshotDir -> "snapshot"
+                else -> "invalid"
+            }
+
             if (shouldInclude) {
-                onDirFound(versionDir)
+                onDirFound(versionDir, matchType)
             }
         }
     }
@@ -143,23 +151,6 @@ class MavenConfigService(project: Project) : AbstractConfigService(project) {
         return dir.listFiles()?.any {
             it.isFile && (it.name.endsWith(".jar.lastUpdated") || it.name.endsWith(".pom.lastUpdated"))
         } ?: false
-    }
-
-    // 检查是否是有效的Maven版本目录
-    private fun isValidMavenVersionDir(dir: File): Boolean {
-        if (!dir.isDirectory) return false
-
-        // 检查是否包含jar或pom文件，或者lastUpdated文件
-        val hasValidFiles = dir.listFiles()?.any { file ->
-            file.isFile && (file.name.endsWith(".jar") || file.name.endsWith(".pom") || file.name.endsWith(".jar.lastUpdated") || file.name.endsWith(
-                ".pom.lastUpdated"
-            ))
-        } ?: false
-
-        // 检查目录结构：至少应该有两级父目录（groupId/artifactId/version）
-        val hasValidStructure = dir.parentFile?.parentFile != null
-
-        return hasValidFiles && hasValidStructure
     }
 
     // 只扫描失效包
@@ -173,69 +164,6 @@ class MavenConfigService(project: Project) : AbstractConfigService(project) {
                     dirsToProcess.add(versionDir)
                 }
             }
-    }
-
-    // 扫描SNAPSHOT和失效包
-    private fun scanForSnapshotAndFailedDownloads(dir: File, dirsToProcess: MutableSet<File>) {
-        // 先查找失效包
-        scanForFailedDownloadsOnly(dir, dirsToProcess)
-
-        // 再查找SNAPSHOT目录，但使用更高效的方式
-        dir.walk().filter {
-            it.isDirectory && it.name.contains("SNAPSHOT")
-                    // 确保是版本目录，而不是中间目录
-                    && isValidMavenVersionDir(it)
-        }.forEach { dirsToProcess.add(it) }
-    }
-
-    // 根据groupId:artifactId扫描
-    private fun scanByGroupArtifact(dir: File, targetGroupArtifact: List<String>, dirsToProcess: MutableSet<File>) {
-        when (targetGroupArtifact.size) {
-            2 -> {
-                // 完整的groupId:artifactId
-                val (group, artifact) = targetGroupArtifact
-                if (group.isNotEmpty() && artifact.isNotEmpty()) {
-                    val groupPath = group.replace('/', File.separatorChar)
-                    val artifactPath = artifact.replace('/', File.separatorChar)
-                    val targetDir = File(dir, "$groupPath${File.separator}$artifactPath")
-
-                    if (targetDir.exists() && targetDir.isDirectory) {
-                        // 只添加包含jar或pom文件的版本目录
-                        targetDir.listFiles()?.filter { it.isDirectory }?.forEach { versionDir ->
-                            if (isValidMavenVersionDir(versionDir)) {
-                                dirsToProcess.add(versionDir)
-                            }
-                        }
-                    }
-                }
-            }
-
-            1 -> {
-                // 只有groupId，可能是部分输入
-                val group = targetGroupArtifact[0]
-                if (group.isNotEmpty()) {
-                    // 使用模糊匹配而不是精确路径
-                    val groupParts = group.split('/')
-
-                    // 如果groupId太短（少于3个字符），可能会匹配太多目录，增加限制
-                    if (groupParts.last().length < 3 && groupParts.size == 1) {
-                        // 对于太短的输入，只查找失效包
-                        return@scanByGroupArtifact
-                    }
-
-                    // 使用更智能的方式查找匹配的groupId目录
-                    val matchingGroupDirs = findMatchingGroupDirectories(dir, groupParts)
-
-                    // 对于每个匹配的groupId目录，递归查找所有子目录下的Maven版本目录
-                    matchingGroupDirs.forEach { groupDir ->
-                        findAllMavenVersionDirs(groupDir, dirsToProcess)
-                    }
-                }
-            }
-        }
-
-        // 同时查找失效包
-        scanForFailedDownloadsOnly(dir, dirsToProcess)
     }
 
     // 递归查找所有Maven版本目录
@@ -305,7 +233,7 @@ class MavenConfigService(project: Project) : AbstractConfigService(project) {
         val previewItems = mutableListOf<CleanupPreview>()
         var totalSize = 0L
 
-        scanRepository(repoDir, { versionDir ->
+        scanRepository(repoDir, { versionDir, matchType ->
             val dirSize = calculateDirSize(versionDir)
             val (packageName, version, relativePath) = extractPackageInfo(versionDir)
 
@@ -316,7 +244,8 @@ class MavenConfigService(project: Project) : AbstractConfigService(project) {
                     fileSize = dirSize,
                     lastModified = versionDir.lastModified(),
                     dependencyType = DependencyType.MAVEN,
-                    relativePath = relativePath
+                    relativePath = relativePath,
+                    matchType = matchType
                 )
             )
             totalSize += dirSize
