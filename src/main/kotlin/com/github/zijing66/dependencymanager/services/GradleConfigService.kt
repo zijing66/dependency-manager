@@ -1,9 +1,6 @@
 package com.github.zijing66.dependencymanager.services
 
-import com.github.zijing66.dependencymanager.models.CleanupPreview
-import com.github.zijing66.dependencymanager.models.CleanupResult
-import com.github.zijing66.dependencymanager.models.CleanupSummary
-import com.github.zijing66.dependencymanager.models.DependencyType
+import com.github.zijing66.dependencymanager.models.*
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.project.Project
 import java.io.File
@@ -68,6 +65,27 @@ class GradleConfigService(project: Project) : AbstractConfigService(project) {
         return "$gradleUserHome/caches/modules-2/files-2.1".replace('\\', '/')
     }
 
+    override fun isTargetFile(file: File): Boolean {
+        return file.isFile && (file.name.endsWith(".jar") || file.name.endsWith(".pom"))
+    }
+
+    override fun isTargetInvalidFile(file: File): Boolean {
+        return false
+    }
+
+    override fun getTargetPackageInfo(rootDir: File, file: File): PkgData {
+        val versionDir = file.parentFile.parentFile
+        val relativePath = versionDir?.relativeTo(rootDir)?.path?.replace('\\', '/')
+        val pathList = relativePath?.split('/')
+        return PkgData(
+            relativePath = relativePath ?: "",
+            packageName = "${
+                pathList?.dropLast(2)?.joinToString(".")
+            }:${pathList?.get(pathList.size - 2)}:${pathList?.last()}",
+            packageDir = versionDir
+        )
+    }
+
     private fun scanRepository(
         dir: File, onDirFound: (File, String) -> Unit, includeSnapshot: Boolean = false, groupArtifact: String? = null
     ) {
@@ -82,33 +100,24 @@ class GradleConfigService(project: Project) : AbstractConfigService(project) {
             )
             return
         }
+        val pathPkgDataMap = fetchPkgMap(dir)
 
-        dir.walk().forEach { versionDir ->
-            // 验证这是一个有效的Maven依赖版本目录
-            if (!isValidGradleVersionDir(versionDir)) {
-                return@forEach
-            }
-
-            val relativePath = versionDir.relativeTo(dir).path.replace('\\', '/')
-            val pathComponents = relativePath.split('/')
-
+        pathPkgDataMap.forEach({ (path, pkgData) ->
             // 检查是否是SNAPSHOT目录
-            val isSnapshotDir = pathComponents.lastOrNull()?.contains("SNAPSHOT") == true
+            val isSnapshotDir = pkgData.packageName.contains("SNAPSHOT")
 
             // 检查是否匹配指定的group/artifact
             val isTargetGroupArtifact = when (targetGroupArtifact?.size) {
                 2 -> {
-                    // 完整的groupId:artifactId
                     val (group, artifact) = targetGroupArtifact
-                    val artifactDir = versionDir.parentFile
-                    val groupPath = artifactDir.parentFile
-                    groupPath.name == group && artifactDir.name == artifact
+                    pkgData.packageName.startsWith("${group}:${artifact}")
                 }
+
                 1 -> {
-                    // 只有groupId，可能是部分输入
                     val group = targetGroupArtifact[0]
-                    relativePath.startsWith(group)
+                    pkgData.packageName.startsWith(group)
                 }
+
                 else -> {
                     true
                 }
@@ -130,25 +139,9 @@ class GradleConfigService(project: Project) : AbstractConfigService(project) {
             }
 
             if (shouldInclude) {
-                onDirFound(versionDir, matchType)
+                onDirFound(pkgData.packageDir, matchType)
             }
-        }
-    }
-
-    private fun isValidGradleVersionDir(dir: File): Boolean {
-        if (!dir.isDirectory) return false
-
-        // 检查第二级目录中的文件是否为jar或pom文件
-        val validFilesExist = dir.listFiles()?.any { versionDir ->
-            versionDir.isDirectory && versionDir.listFiles()?.any { file ->
-                file.isFile && (file.name.endsWith(".jar") || file.name.endsWith(".pom"))
-            } == true
-        } ?: false
-
-        // 检查目录结构：至少应该有两级父目录（groupId/artifactId/version）
-        val hasValidStructure = dir.parentFile?.parentFile != null
-
-        return validFilesExist && hasValidStructure
+        })
     }
 
     override fun updateLocalRepository(newPath: String) {

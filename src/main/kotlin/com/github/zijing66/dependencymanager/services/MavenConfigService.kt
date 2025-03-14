@@ -1,9 +1,6 @@
 package com.github.zijing66.dependencymanager.services
 
-import com.github.zijing66.dependencymanager.models.CleanupPreview
-import com.github.zijing66.dependencymanager.models.CleanupResult
-import com.github.zijing66.dependencymanager.models.CleanupSummary
-import com.github.zijing66.dependencymanager.models.DependencyType
+import com.github.zijing66.dependencymanager.models.*
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.Task
@@ -64,62 +61,60 @@ class MavenConfigService(project: Project) : AbstractConfigService(project) {
         }
     }
 
-    // 检查是否是有效的Maven版本目录
-    private fun isValidMavenVersionDir(dir: File): Boolean {
-        // 检查是否是目录
-        if (!dir.isDirectory) return false
+    override fun isTargetFile(file: File): Boolean {
+        return file.isFile && (file.name.endsWith(".jar") || file.name.endsWith(".pom") || file.name.endsWith(".jar.lastUpdated") || file.name.endsWith(
+            ".pom.lastUpdated"
+        ))
+    }
 
-        val files = dir.listFiles() ?: emptyArray()
+    override fun isTargetInvalidFile(file: File): Boolean {
+        return file.isFile && (file.name.endsWith(".jar.lastUpdated") || file.name.endsWith(".pom.lastUpdated"))
+    }
 
-        // 检查是否包含jar或pom文件，或者lastUpdated文件
-        val hasValidFiles = files.any { file ->
-            file.isFile && (file.name.endsWith(".jar") || file.name.endsWith(".pom") || file.name.endsWith(".jar.lastUpdated") || file.name.endsWith(".pom.lastUpdated"))
-        }
-
-        // 检查目录结构：至少应该有两级父目录（groupId/artifactId/version）
-        val hasValidStructure = dir.parentFile?.parentFile != null
-
-        return hasValidFiles && hasValidStructure
+    override fun getTargetPackageInfo(rootDir: File, file: File): PkgData {
+        val versionDir = file.parentFile
+        val relativePath = versionDir?.relativeTo(rootDir)?.path?.replace('\\', '/')
+        val pathList = relativePath?.split('/')
+        return PkgData(
+            relativePath = relativePath ?: "",
+            packageName = "${
+                pathList?.dropLast(2)?.joinToString(".")
+            }:${pathList?.get(pathList.size - 2)}:${pathList?.last()}",
+            packageDir = versionDir
+        )
     }
 
     // 修改scanRepository方法，传递文件数组
     private fun scanRepository(
         dir: File, onDirFound: (File, String) -> Unit, includeSnapshot: Boolean = false, groupArtifact: String? = null
     ) {
-        val targetGroupArtifact = groupArtifact?.split(":")?.map { it.replace('.', '/', true) }
+        val targetGroupArtifact = groupArtifact?.split(":")
 
-        // 使用单次遍历记录所有目录信息
-        dir.walk().forEach { versionDir ->
-            // 验证这是一个有效的Maven依赖版本目录
-            if (!isValidMavenVersionDir(versionDir)) {
-                return@forEach
-            }
+        val pathPkgDataMap = fetchPkgMap(dir)
 
-            val relativePath = versionDir.relativeTo(dir).path.replace('\\', '/')
-            val pathComponents = relativePath.split('/')
-
+        pathPkgDataMap.forEach({ (path, pkgData) ->
             // 检查是否是SNAPSHOT目录
-            val isSnapshotDir = pathComponents.lastOrNull()?.contains("SNAPSHOT") == true
+            val isSnapshotDir = pkgData.packageName.endsWith("SNAPSHOT")
 
             // 检查是否匹配指定的group/artifact
             val isTargetGroupArtifact = when (targetGroupArtifact?.size) {
                 2 -> {
                     val (group, artifact) = targetGroupArtifact
-                    val artifactDir = versionDir.parentFile
-                    val groupPath = artifactDir?.parentFile?.relativeTo(dir)?.path?.replace('\\', '/')
-                    groupPath == group && artifactDir.name == artifact
+                    pkgData.packageName.startsWith("${group}:${artifact}")
                 }
+
                 1 -> {
                     val group = targetGroupArtifact[0]
-                    relativePath.startsWith(group)
+                    pkgData.packageName.startsWith(group)
                 }
+
                 else -> {
                     true
                 }
             }
 
             // 检查是否有lastUpdated文件（失效包）
-            val hasLastUpdated = hasLastUpdatedFiles(versionDir)
+            val hasLastUpdated = pkgData.invalid
 
             // 筛选逻辑
             val shouldInclude = when {
@@ -141,91 +136,9 @@ class MavenConfigService(project: Project) : AbstractConfigService(project) {
             }
 
             if (shouldInclude) {
-                onDirFound(versionDir, matchType)
+                onDirFound(pkgData.packageDir, matchType)
             }
-        }
-    }
-
-    // 检查目录是否包含lastUpdated文件
-    private fun hasLastUpdatedFiles(dir: File): Boolean {
-        return dir.listFiles()?.any {
-            it.isFile && (it.name.endsWith(".jar.lastUpdated") || it.name.endsWith(".pom.lastUpdated"))
-        } ?: false
-    }
-
-    // 只扫描失效包
-    private fun scanForFailedDownloadsOnly(dir: File, dirsToProcess: MutableSet<File>) {
-        // 使用更高效的方式查找lastUpdated文件
-        dir.walk()
-            .filter { it.isFile && (it.name.endsWith(".jar.lastUpdated") || it.name.endsWith(".pom.lastUpdated")) }
-            .forEach { file ->
-                val versionDir = file.parentFile
-                if (versionDir != null) {
-                    dirsToProcess.add(versionDir)
-                }
-            }
-    }
-
-    // 递归查找所有Maven版本目录
-    private fun findAllMavenVersionDirs(dir: File, result: MutableSet<File>) {
-        if (!dir.isDirectory) return
-
-        // 检查当前目录是否是有效的Maven版本目录
-        if (isValidMavenVersionDir(dir)) {
-            result.add(dir)
-            return // 如果是版本目录，不再向下递归
-        }
-
-        // 递归查找子目录
-        dir.listFiles()?.filter { it.isDirectory }?.forEach { subDir ->
-            findAllMavenVersionDirs(subDir, result)
-        }
-    }
-
-    // 查找匹配的groupId目录
-    private fun findMatchingGroupDirectories(baseDir: File, groupParts: List<String>): List<File> {
-        // 如果是空列表，返回空结果
-        if (groupParts.isEmpty()) return emptyList()
-
-        // 递归查找匹配的目录
-        return findMatchingDirectoriesRecursive(baseDir, groupParts, 0)
-    }
-
-    // 递归查找匹配的目录
-    private fun findMatchingDirectoriesRecursive(currentDir: File, parts: List<String>, index: Int): List<File> {
-        // 如果已经处理完所有部分，返回当前目录
-        if (index >= parts.size) {
-            return listOf(currentDir)
-        }
-
-        val currentPart = parts[index]
-        val results = mutableListOf<File>()
-
-        // 获取当前目录下的所有子目录
-        val subDirs = currentDir.listFiles()?.filter { it.isDirectory } ?: return emptyList()
-
-        // 查找匹配当前部分的目录
-        val matchingDirs = subDirs.filter {
-            // 如果是最后一部分，使用前缀匹配；否则使用精确匹配
-            if (index == parts.size - 1) {
-                it.name.startsWith(currentPart)
-            } else {
-                it.name == currentPart
-            }
-        }
-
-        // 对于每个匹配的目录，继续递归查找
-        for (dir in matchingDirs) {
-            if (index == parts.size - 1) {
-                // 如果是最后一部分，添加当前目录
-                results.add(dir)
-            } else {
-                // 否则继续递归
-                results.addAll(findMatchingDirectoriesRecursive(dir, parts, index + 1))
-            }
-        }
-
-        return results
+        })
     }
 
     override fun previewCleanup(includeSnapshot: Boolean, groupArtifact: String?): CleanupSummary {
@@ -310,9 +223,9 @@ class MavenConfigService(project: Project) : AbstractConfigService(project) {
     private fun extractPackageInfo(file: File): Triple<String, String, String> {
         val repoPath = getLocalRepository(false).replace('\\', '/')
         val filePath = file.absolutePath.replace(
-                '\\',
-                '/'
-            )
+            '\\',
+            '/'
+        )
         val relativePath = filePath.removePrefix(repoPath).trimStart('/')
 
         val components = relativePath.split("/").filter { it.isNotEmpty() }

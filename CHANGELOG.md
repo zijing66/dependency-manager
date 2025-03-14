@@ -4,6 +4,12 @@
 
 [中文更新日志](CHANGELOG-CN.md)
 
+## [1.0.4]
+
+### Improved
+
+- Optimize performance
+
 ## [1.0.3]
 
 ### Added

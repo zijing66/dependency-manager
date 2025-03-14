@@ -10,9 +10,3 @@ data class CleanupPreview(
     val relativePath: String,
     val matchType: String
 )
-
-data class CleanupSummary(
-    val totalFiles: Int,
-    val totalSize: Long,
-    val previewItems: List<CleanupPreview>
-) 

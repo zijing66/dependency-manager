@@ -2,6 +2,12 @@
 
 [English Change Log](CHANGELOG.md)
 
+## [1.0.4]
+
+### 优化
+
+- 优化性能
+
 ## [1.0.3]
 
 ### 新增
