@@ -2,6 +2,12 @@
 
 [English Change Log](CHANGELOG.md)
 
+## [1.0.5]
+
+### 修复
+
+- 修复若干问题
+
 ## [1.0.4]
 
 ### 优化

@@ -1,13 +1,12 @@
 package com.github.zijing66.dependencymanager.services
 
-import com.github.zijing66.dependencymanager.models.*
+import com.github.zijing66.dependencymanager.models.DependencyType
+import com.github.zijing66.dependencymanager.models.PkgData
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.project.Project
-import java.io.File
-import java.util.Properties
-import com.intellij.openapi.progress.ProgressIndicator
-import com.intellij.openapi.progress.Task
 import com.intellij.openapi.ui.Messages
+import java.io.File
+import java.util.*
 
 @Service(Service.Level.PROJECT)
 class GradleConfigService(project: Project) : AbstractConfigService(project) {
@@ -65,6 +64,15 @@ class GradleConfigService(project: Project) : AbstractConfigService(project) {
         return "$gradleUserHome/caches/modules-2/files-2.1".replace('\\', '/')
     }
 
+    // 新增路径更新方法
+    override fun updateLocalRepository(newPath: String) {
+        if (isValidRepoPath(newPath)) {
+            customRepoPath = newPath
+        } else {
+            throw IllegalArgumentException("Invalid repository path: $newPath")
+        }
+    }
+
     override fun isTargetFile(file: File): Boolean {
         return file.isFile && (file.name.endsWith(".jar") || file.name.endsWith(".pom"))
     }
@@ -86,8 +94,12 @@ class GradleConfigService(project: Project) : AbstractConfigService(project) {
         )
     }
 
-    private fun scanRepository(
-        dir: File, onDirFound: (File, String) -> Unit, includeSnapshot: Boolean = false, groupArtifact: String? = null
+    override fun getDependencyType(): DependencyType {
+        return DependencyType.GRADLE
+    }
+
+    override fun scanRepository(
+        dir: File, onDirFound: (File, String) -> Unit, includeSnapshot: Boolean, groupArtifact: String?
     ) {
         val targetGroupArtifact = groupArtifact?.split(":")
 
@@ -142,120 +154,6 @@ class GradleConfigService(project: Project) : AbstractConfigService(project) {
                 onDirFound(pkgData.packageDir, matchType)
             }
         })
-    }
-
-    override fun updateLocalRepository(newPath: String) {
-        if (isValidRepoPath(newPath)) {
-            customRepoPath = newPath
-        } else {
-            throw IllegalArgumentException("Invalid repository path: $newPath")
-        }
-    }
-
-    override fun previewCleanup(includeSnapshot: Boolean, groupArtifact: String?): CleanupSummary {
-        val repoDir = File(getLocalRepository(false))
-        val previewItems = mutableListOf<CleanupPreview>()
-        var totalSize = 0L
-
-        scanRepository(repoDir, { versionDir, matchType ->
-            val dirSize = calculateDirSize(versionDir)
-            val (packageName, version, relativePath) = extractPackageInfo(versionDir)
-
-            previewItems.add(
-                CleanupPreview(
-                    path = versionDir.absolutePath,
-                    packageName = "$packageName:$version",
-                    fileSize = dirSize,
-                    lastModified = versionDir.lastModified(),
-                    dependencyType = DependencyType.GRADLE,
-                    relativePath = relativePath,
-                    matchType = matchType
-                )
-            )
-            totalSize += dirSize
-        }, includeSnapshot, groupArtifact)
-
-        return CleanupSummary(
-            totalFiles = previewItems.size, totalSize = totalSize, previewItems = previewItems
-        )
-    }
-
-    override fun cleanupRepository(
-        project: Project,
-        selectedItems: List<CleanupPreview>,
-        onProgress: (Int, Int) -> Unit,
-        onComplete: (List<CleanupResult>) -> Unit
-    ) {
-        object : Task.Backgroundable(project, "Cleaning up gradle downloads", true) {
-            override fun run(indicator: ProgressIndicator) {
-                val results = mutableListOf<CleanupResult>()
-                val totalItems = selectedItems.size
-
-                selectedItems.forEachIndexed { index, item ->
-                    indicator.fraction = index.toDouble() / totalItems
-                    indicator.text = "Cleaning up: ${item.packageName}"
-
-                    val file = File(item.path)
-                    val success = if (file.isDirectory) {
-                        // 删除整个目录
-                        file.deleteRecursively()
-                    } else {
-                        file.delete()
-                    }
-
-                    results.add(
-                        CleanupResult(
-                            path = item.path,
-                            packageName = item.packageName,
-                            dependencyType = item.dependencyType,
-                            success = success,
-                            errorMessage = if (!success) "Failed to delete directory" else null
-                        )
-                    )
-
-                    onProgress(index + 1, totalItems)
-                }
-                onComplete(results)
-            }
-        }.queue()
-    }
-
-    private fun calculateDirSize(dir: File): Long {
-        var size = 0L
-        dir.walkTopDown().forEach { file ->
-            if (file.isFile) {
-                size += file.length()
-            }
-        }
-        return size
-    }
-
-    private fun extractPackageInfo(file: File): Triple<String, String, String> {
-        val repoPath = getLocalRepository(false).replace('\\', '/')
-        val filePath = file.absolutePath.replace('\\', '/')
-        val relativePath = filePath.removePrefix(repoPath).trimStart('/')
-
-        val components = relativePath.split("/").filter { it.isNotEmpty() }
-
-        return when {
-            components.size >= 3 -> {
-                // 正常的Gradle目录结构：groupId/artifactId/version
-                val version = components.last()
-                val artifactId = components[components.size - 2]
-                val groupId = components.dropLast(2).joinToString(".")
-                Triple("$groupId:$artifactId", version, relativePath)
-            }
-
-            components.size == 2 -> {
-                // 简化的结构：artifactId/version
-                Triple(components[0], components[1], relativePath)
-            }
-
-            else -> {
-                // 异常情况，使用目录名作为标识
-                Triple(file.parentFile?.name ?: "unknown", file.name, relativePath)
-            }
-        }
     }
 
 }

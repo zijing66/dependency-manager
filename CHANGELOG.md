@@ -4,6 +4,12 @@
 
 [中文更新日志](CHANGELOG-CN.md)
 
+## [1.0.5]
+
+### Fixed
+
+- Fixed some issues
+
 ## [1.0.4]
 
 ### Improved
