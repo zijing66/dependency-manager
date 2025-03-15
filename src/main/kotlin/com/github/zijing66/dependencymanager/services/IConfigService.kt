@@ -3,6 +3,7 @@ package com.github.zijing66.dependencymanager.services
 import com.github.zijing66.dependencymanager.models.CleanupPreview
 import com.github.zijing66.dependencymanager.models.CleanupResult
 import com.github.zijing66.dependencymanager.models.CleanupSummary
+import com.github.zijing66.dependencymanager.models.ConfigOptions
 import com.github.zijing66.dependencymanager.models.DependencyType
 import com.intellij.openapi.project.Project
 
@@ -14,9 +15,13 @@ interface IConfigService {
 
     fun updateLocalRepository(newPath: String)
 
+    /**
+     * 预览清理操作
+     * @param configOptions 配置选项，包含includeSnapshot, showInvalidPackages, showPlatformSpecificBinaries等选项
+     * @return 清理预览摘要
+     */
     fun previewCleanup(
-        includeSnapshot: Boolean = false,
-        groupArtifact: String? = null
+        configOptions: ConfigOptions
     ): CleanupSummary
 
     fun cleanupRepository(

@@ -1,10 +1,10 @@
 package com.github.zijing66.dependencymanager.services
 
+import com.github.zijing66.dependencymanager.models.ConfigOptions
 import com.github.zijing66.dependencymanager.models.DependencyType
 import com.github.zijing66.dependencymanager.models.PkgData
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.ui.Messages
 import java.io.File
 import java.util.*
 
@@ -98,25 +98,21 @@ class GradleConfigService(project: Project) : AbstractConfigService(project) {
         return DependencyType.GRADLE
     }
 
+    /**
+     * 实现新的 scanRepository 方法，使用 ConfigOptions 对象
+     */
     override fun scanRepository(
-        dir: File, onDirFound: (File, String) -> Unit, includeSnapshot: Boolean, groupArtifact: String?
+        dir: File, onDirFound: (File, String, PkgData) -> Unit, configOptions: ConfigOptions
     ) {
-        val targetGroupArtifact = groupArtifact?.split(":")
-
-        if (!includeSnapshot && groupArtifact == null) {
-            // 在IDEA中提示用户
-            Messages.showErrorDialog(
-                project,
-                "Please choose Snapshot or input Group/Artifact",
-                "Input Error"
-            )
-            return
-        }
+        val targetGroupArtifact = configOptions.targetPackage.takeIf { it.isNotEmpty() }?.split(":")
         val pathPkgDataMap = fetchPkgMap(dir)
 
-        pathPkgDataMap.forEach({ (path, pkgData) ->
+        pathPkgDataMap.forEach { (path, pkgData) ->
             // 检查是否是SNAPSHOT目录
             val isSnapshotDir = pkgData.packageName.contains("SNAPSHOT")
+            
+            // 检查是否是失效的包
+            val isInvalidPackage = pkgData.invalid
 
             // 检查是否匹配指定的group/artifact
             val isTargetGroupArtifact = when (targetGroupArtifact?.size) {
@@ -131,29 +127,34 @@ class GradleConfigService(project: Project) : AbstractConfigService(project) {
                 }
 
                 else -> {
-                    true
+                    false
                 }
             }
+            
             // 筛选逻辑
             val shouldInclude = when {
-                // 如果是SNAPSHOT但目录不包含SNAPSHOT，则排除
-                includeSnapshot && !isSnapshotDir -> false
-                // 如果指定了groupId:artifactId但不匹配，则排除
-                groupArtifact != null && !isTargetGroupArtifact -> false
-                // 其他情况都包含
-                else -> true
+                configOptions.showInvalidPackages && isInvalidPackage -> true
+                configOptions.targetPackage.isNotEmpty() && isTargetGroupArtifact -> true
+                configOptions.includeSnapshot && isSnapshotDir -> true
+                else -> false
             }
+            
             // 设置匹配类型
             val matchType = when {
-                groupArtifact != null && isTargetGroupArtifact -> "matched"
-                includeSnapshot && isSnapshotDir -> "snapshot"
-                else -> "invalid"
+                isInvalidPackage -> "invalid"
+                isTargetGroupArtifact -> "matched"
+                isSnapshotDir -> "snapshot"
+                else -> "unknown"
             }
 
             if (shouldInclude) {
-                onDirFound(pkgData.packageDir, matchType)
+                onDirFound(pkgData.packageDir, matchType, pkgData)
             }
-        })
+        }
+    }
+
+    override fun shouldExcludeDirectory(dir: File): Boolean {
+        return false
     }
 
 }

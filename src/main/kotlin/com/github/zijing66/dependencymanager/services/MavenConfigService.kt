@@ -1,10 +1,14 @@
 package com.github.zijing66.dependencymanager.services
 
+import com.github.zijing66.dependencymanager.models.ConfigOptions
 import com.github.zijing66.dependencymanager.models.DependencyType
 import com.github.zijing66.dependencymanager.models.PkgData
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.project.Project
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.Paths
+import java.util.Properties
 import javax.xml.parsers.DocumentBuilderFactory
 
 @Service(Service.Level.PROJECT)
@@ -86,14 +90,16 @@ class MavenConfigService(project: Project) : AbstractConfigService(project) {
         return DependencyType.MAVEN
     }
 
+    /**
+     * 实现新的 scanRepository 方法，使用 ConfigOptions 对象
+     */
     override fun scanRepository(
-        dir: File, onDirFound: (File, String) -> Unit, includeSnapshot: Boolean, groupArtifact: String?
+        dir: File, onDirFound: (File, String, PkgData) -> Unit, configOptions: ConfigOptions
     ) {
-        val targetGroupArtifact = groupArtifact?.split(":")
-
+        val targetGroupArtifact = configOptions.targetPackage.takeIf { it.isNotEmpty() }?.split(":")
         val pathPkgDataMap = fetchPkgMap(dir)
 
-        pathPkgDataMap.forEach({ (path, pkgData) ->
+        pathPkgDataMap.forEach { (path, pkgData) ->
             // 检查是否是SNAPSHOT目录
             val isSnapshotDir = pkgData.packageName.endsWith("SNAPSHOT")
 
@@ -110,7 +116,7 @@ class MavenConfigService(project: Project) : AbstractConfigService(project) {
                 }
 
                 else -> {
-                    true
+                    false
                 }
             }
 
@@ -119,27 +125,28 @@ class MavenConfigService(project: Project) : AbstractConfigService(project) {
 
             // 筛选逻辑
             val shouldInclude = when {
-                // 如果是SNAPSHOT但目录不包含SNAPSHOT，则排除
-                includeSnapshot && !isSnapshotDir && !hasLastUpdated -> false
-                // 如果指定了groupId:artifactId但不匹配，则排除
-                groupArtifact != null && !isTargetGroupArtifact && !hasLastUpdated -> false
-                // 如果既不包含SNAPSHOT也不指定groupId:artifactId也不包含lastUpdated，则排除
-                !includeSnapshot && groupArtifact == null && !hasLastUpdated -> false
-                else -> true
+                configOptions.showInvalidPackages && hasLastUpdated -> true
+                configOptions.targetPackage.isNotEmpty() && isTargetGroupArtifact -> true
+                configOptions.includeSnapshot && isSnapshotDir -> true
+                else -> false
             }
 
             // 设置匹配类型
             val matchType = when {
                 hasLastUpdated -> "invalid"
-                groupArtifact != null && isTargetGroupArtifact -> "matched"
-                includeSnapshot && isSnapshotDir -> "snapshot"
-                else -> "invalid"
+                configOptions.targetPackage.isNotEmpty() && isTargetGroupArtifact -> "matched"
+                isSnapshotDir -> "snapshot"
+                else -> "unknown"
             }
 
             if (shouldInclude) {
-                onDirFound(pkgData.packageDir, matchType)
+                onDirFound(pkgData.packageDir, matchType, pkgData)
             }
-        })
+        }
+    }
+
+    override fun shouldExcludeDirectory(dir: File): Boolean {
+        return false
     }
 
 }

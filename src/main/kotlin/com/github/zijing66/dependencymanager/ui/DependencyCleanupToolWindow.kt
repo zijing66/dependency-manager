@@ -3,9 +3,11 @@ package com.github.zijing66.dependencymanager.ui
 import com.github.zijing66.dependencymanager.models.CleanupPreview
 import com.github.zijing66.dependencymanager.models.CleanupSummary
 import com.github.zijing66.dependencymanager.models.DependencyType
+import com.github.zijing66.dependencymanager.models.ConfigOptions
 import com.github.zijing66.dependencymanager.services.*
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
 import com.intellij.ui.JBColor
@@ -15,6 +17,7 @@ import com.intellij.util.ui.JBUI
 import java.awt.BorderLayout
 import java.awt.Component
 import java.awt.Dimension
+import java.awt.FlowLayout
 import java.text.DecimalFormat
 import java.text.SimpleDateFormat
 import java.util.*
@@ -22,6 +25,7 @@ import javax.swing.*
 import javax.swing.table.AbstractTableModel
 import javax.swing.table.DefaultTableCellRenderer
 import javax.swing.table.TableCellRenderer
+import java.io.File
 
 private val LOG = logger<DependencyCleanupToolWindow>()
 
@@ -119,6 +123,7 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
     private lateinit var configService: IConfigService
     private lateinit var currentDependencyType: DependencyType
     private lateinit var snapshotCheckBox: JCheckBox
+    private lateinit var invalidPackageCheckBox: JCheckBox
     private lateinit var groupArtifactField: JTextField
     private lateinit var progressBar: JProgressBar
     private lateinit var statusLabel: JLabel
@@ -136,8 +141,8 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
                 getColumn(0).preferredWidth = 30 // Checkbox
                 getColumn(0).maxWidth = 30
                 getColumn(1).preferredWidth = 300 // Package Name
-                getColumn(2).preferredWidth = 100 // Match Type
-                getColumn(2).maxWidth = 100
+                getColumn(2).preferredWidth = 120 // Match Type
+                getColumn(2).maxWidth = 120  // 增加Match Type列宽以便完整显示"prerelease"
                 getColumn(3).preferredWidth = 100 // Size
                 getColumn(3).maxWidth = 100
                 getColumn(4).preferredWidth = 150 // Last Modified
@@ -165,8 +170,29 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
             }
             // 设置渲染器
             columnModel.getColumn(0).cellRenderer = createBooleanRenderer()
-            columnModel.getColumn(2).cellRenderer = DefaultTableCellRenderer().apply {
-                horizontalAlignment = SwingConstants.RIGHT
+            columnModel.getColumn(2).cellRenderer = object : DefaultTableCellRenderer() {
+                override fun getTableCellRendererComponent(
+                    table: JTable, 
+                    value: Any?,
+                    isSelected: Boolean,
+                    hasFocus: Boolean,
+                    row: Int,
+                    column: Int
+                ): Component {
+                    val c = super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column)
+                    horizontalAlignment = SwingConstants.CENTER
+                    
+                    if (!isSelected) {
+                        when (value) {
+                            "matched" -> foreground = JBColor.GREEN.darker()
+                            "prerelease", "snapshot" -> foreground = JBColor.ORANGE // 统一prerelease和snapshot的样式
+                            "native" -> foreground = JBColor.BLUE
+                            else -> foreground = JBColor.GRAY
+                        }
+                    }
+                    
+                    return c
+                }
             }
 
             // 修改表头复选框引用
@@ -257,12 +283,22 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
         }
     }
 
+    private fun judgeForDependencyType(func: () -> Boolean, dependencyTypeList: Array<DependencyType>) : Boolean {
+        for (dependencyType in dependencyTypeList) {
+            if (dependencyTypeList.contains(currentDependencyType)) {
+                return func()
+            }
+        }
+        return false
+    }
+
     private fun validForDependencyType(func: () -> Unit, dependencyTypeList: Array<DependencyType>) {
         for (dependencyType in dependencyTypeList) {
             if (dependencyType == DependencyType.UNKNOWN || !dependencyTypeList.contains(currentDependencyType)) {
                 continue
             }
             func()
+            break; // 只执行一次
          }
         return
     }
@@ -296,6 +332,9 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
         controlPanel.removeAll()
         // 清空预览数据
         previewModel.setData(emptyList())
+        
+        // 重置配置项
+        ConfigOptions.getInstance().resetAll()
 
         // 创建一个水平布局的面板
         val topRowPanel = JPanel().apply {
@@ -410,6 +449,8 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
                 preferredSize = Dimension(120, 25)  // 设置固定宽度
                 validForDependencyType({add(JLabel("Maven repository: "), BorderLayout.WEST)}, arrayOf(DependencyType.MAVEN))
                 validForDependencyType({add(JLabel("Gradle repository: "), BorderLayout.WEST)}, arrayOf(DependencyType.GRADLE))
+                validForDependencyType({add(JLabel("NPM cache: "), BorderLayout.WEST)}, arrayOf(DependencyType.NPM))
+                validForDependencyType({add(JLabel("PIP cache: "), BorderLayout.WEST)}, arrayOf(DependencyType.PIP))
             }
             add(labelPanel)
             
@@ -421,25 +462,8 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
             add(refreshButton)
         }
         
-        val filterPanel = JPanel().apply {
-            layout = BoxLayout(this, BoxLayout.X_AXIS)
-            alignmentX = Component.LEFT_ALIGNMENT
-            add(JLabel("Choose:"))
-            add(Box.createHorizontalStrut(5)) // 添加间隔
-            add(JCheckBox("SNAPSHOT").apply {
-                snapshotCheckBox = this  // 初始化复选框引用
-                toolTipText = "Include SNAPSHOT packages"
-            })
-            add(Box.createHorizontalStrut(20)) // 加大间隔
-            add(JLabel("Choose [Group:Artifact]:"))
-            add(Box.createHorizontalStrut(5))
-            add(JTextField(15).apply {
-                groupArtifactField = this  // 初始化输入框引用
-                toolTipText = "Format: groupId:artifactId or groupId"
-                maximumSize = Dimension(200, preferredSize.height)  // 限制最大宽度
-            })
-            add(Box.createHorizontalGlue())  // 添加水平弹性空间
-        }
+        // 使用新定义的方法创建过滤面板
+        val filterPanel = createFilterPanel()
         
         val buttonPanel = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.X_AXIS)
@@ -464,8 +488,9 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
             add(errorPanel)
             
             add(Box.createVerticalStrut(10))
+            // 添加过滤面板，已经有了自己的边距
             add(filterPanel)
-            add(Box.createVerticalStrut(10))
+            add(Box.createVerticalStrut(5))
             add(buttonPanel)
             add(Box.createVerticalStrut(5))
 
@@ -509,21 +534,38 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
         configService = when (dependencyType) {
             DependencyType.MAVEN -> MavenConfigService(project)
             DependencyType.GRADLE -> GradleConfigService(project)
+            DependencyType.NPM -> NPMConfigService(project)
+            DependencyType.PIP -> PIPConfigService(project)
             else -> throw IllegalArgumentException("Unsupported dependency type: $dependencyType")
         }
     }
 
     private fun loadPreview(configService: IConfigService) {
+        val configOptions = ConfigOptions.getInstance()
+        
+        // 更新配置选项
+        configOptions.includeSnapshot = snapshotCheckBox.isSelected
+        configOptions.targetPackage = groupArtifactField.text.takeIf { it.isNotEmpty() } ?: ""
+        
+        judgeForDependencyType({
+            if (!configOptions.showPlatformSpecificBinaries && !configOptions.includeSnapshot && 
+                configOptions.targetPackage.isEmpty() && !configOptions.showInvalidPackages) {
+                Messages.showErrorDialog(
+                    project,
+                    "Please choose at least one filter option",
+                    "Input Error"
+                )
+                return@judgeForDependencyType true
+            }
+            return@judgeForDependencyType false
+        }, arrayOf(DependencyType.GRADLE, DependencyType.NPM, DependencyType.PIP)) && return
+
         progressBar.isVisible = true
         progressBar.isIndeterminate = true
         statusLabel.text = "Loading preview..."
 
         SwingUtilities.invokeLater {
-            currentPreview = configService.previewCleanup(
-                // 添加参数传递
-                includeSnapshot = snapshotCheckBox.isSelected,
-                groupArtifact = groupArtifactField.text.takeIf { it.isNotEmpty() }
-            )
+            currentPreview = configService.previewCleanup(configOptions)
             previewModel.setData(currentPreview?.previewItems ?: emptyList())
             headerCheckBox.isSelected = false
             updateStatus()
@@ -590,6 +632,149 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
                 else -> "xdg-open" // Linux
             }
             Runtime.getRuntime().exec(arrayOf(command, file.path))
+        }
+    }
+
+    // 创建统一样式的选项面板 - 用于复选框选项
+    private fun createFilterOption(labelText: String, checkBoxText: String, checkBoxConfig: JCheckBox.() -> Unit): JPanel {
+        return JPanel(FlowLayout(FlowLayout.LEFT, 5, 0)).apply {
+            border = BorderFactory.createEmptyBorder(2, 0, 2, 0)
+            add(JLabel(labelText))
+            add(JCheckBox(checkBoxText).apply(checkBoxConfig))
+            
+            // 设置最大宽度以确保面板不会过宽
+            maximumSize = Dimension(Int.MAX_VALUE, preferredSize.height)
+        }
+    }
+    
+    private fun createFilterPanel(): JPanel {
+        val configOptions = ConfigOptions.getInstance()
+        
+        return JPanel().apply {
+            // 使用垂直BoxLayout排列所有选项
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            alignmentX = Component.LEFT_ALIGNMENT
+            // 设置一个合理的初始高度
+            preferredSize = Dimension(preferredSize.width, 150) // 增加高度从120到150以显示所有选项
+            border = JBUI.Borders.empty(5, 0)
+            
+            // 直接添加SNAPSHOT/Prerelease选项（第一行）
+            add(createFilterOption("Choose:", "SNAPSHOT") {
+                snapshotCheckBox = this  // 使用this引用JCheckBox实例
+                validForDependencyType({
+                    text = "SNAPSHOT"
+                    toolTipText = "Include SNAPSHOT packages"
+                }, arrayOf(DependencyType.MAVEN, DependencyType.GRADLE))
+                validForDependencyType({
+                    text = "Prerelease"
+                    toolTipText = "Include prerelease packages (alpha, beta, rc, dev, etc.)"
+                }, arrayOf(DependencyType.NPM, DependencyType.PIP))
+                addActionListener {
+                    // 更新配置
+                    configOptions.includeSnapshot = isSelected
+                }
+            }.apply { 
+                alignmentX = Component.LEFT_ALIGNMENT 
+            })
+            
+            // 添加垂直间距
+            add(Box.createVerticalStrut(5))
+            
+            // 无效包选项（新增的第二行）
+            add(createFilterOption("Choose:", "Invalid") {
+                invalidPackageCheckBox = this  // 使用this引用JCheckBox实例
+                toolTipText = "Show invalid packages (corrupted or incomplete downloads)"
+                addActionListener {
+                    // 更新配置
+                    configOptions.showInvalidPackages = isSelected
+                }
+            }.apply { 
+                alignmentX = Component.LEFT_ALIGNMENT 
+            })
+            
+            // 添加垂直间距
+            add(Box.createVerticalStrut(5))
+            
+            // 平台特定二进制文件选项（第三行，仅在适用时显示）
+            validForDependencyType({
+                add(createFilterOption("Choose:", "Platform Binaries") {
+                    isSelected = configOptions.showPlatformSpecificBinaries
+                    toolTipText = "Show platform-specific binary files (win32-x64, darwin-arm64, etc.)"
+                    addActionListener {
+                        configOptions.showPlatformSpecificBinaries = isSelected
+                    }
+                }.apply { 
+                    alignmentX = Component.LEFT_ALIGNMENT 
+                })
+                // 再添加一个垂直间距
+                add(Box.createVerticalStrut(5))
+            }, arrayOf(DependencyType.NPM, DependencyType.PIP))
+            
+            // 包名/组件输入框选项（最后一行）
+            add(createPackageNameOption().apply { 
+                alignmentX = Component.LEFT_ALIGNMENT
+            })
+        }
+    }
+
+    private fun createPackageNameOption(): JPanel {
+        return JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {  // 使用FlowLayout但无内边距
+            // 内部使用BoxLayout的面板
+            val innerPanel = JPanel().apply {
+                layout = BoxLayout(this, BoxLayout.X_AXIS)
+                border = BorderFactory.createEmptyBorder(2, 5, 2, 0)  // 左边加5像素对齐
+                
+                add(JLabel("Choose:"))
+                
+                // 使用变量保存标签引用，便于后续控制可见性
+                val groupArtifactLabel = JLabel("[Group:Artifact]:")
+                val packageNameLabel = JLabel("[Package Name]:")
+                
+                validForDependencyType({
+                    add(groupArtifactLabel)
+                    packageNameLabel.isVisible = false
+                }, arrayOf(DependencyType.MAVEN, DependencyType.GRADLE))
+                
+                validForDependencyType({
+                    add(packageNameLabel)
+                    groupArtifactLabel.isVisible = false
+                }, arrayOf(DependencyType.NPM, DependencyType.PIP))
+                
+                add(JTextField().apply {
+                    groupArtifactField = this  // 初始化输入框引用
+                    
+                    validForDependencyType({
+                        toolTipText = "Format: groupId:artifactId or groupId"
+                    }, arrayOf(DependencyType.MAVEN, DependencyType.GRADLE))
+                    validForDependencyType({
+                        toolTipText = "Package name (e.g., 'react' or 'lodash')"
+                    }, arrayOf(DependencyType.NPM))
+                    validForDependencyType({
+                        toolTipText = "Package name (e.g., 'requests' or 'django')"
+                    }, arrayOf(DependencyType.PIP))
+                    
+                    // 设置输入框的大小
+                    columns = 15
+                    preferredSize = Dimension(160, preferredSize.height)
+                    
+                    // 添加文档监听器以更新配置
+                    document.addDocumentListener(object : javax.swing.event.DocumentListener {
+                        override fun insertUpdate(e: javax.swing.event.DocumentEvent) = updateConfig()
+                        override fun removeUpdate(e: javax.swing.event.DocumentEvent) = updateConfig()
+                        override fun changedUpdate(e: javax.swing.event.DocumentEvent) = updateConfig()
+                        
+                        private fun updateConfig() {
+                            ConfigOptions.getInstance().targetPackage = text.takeIf { it.isNotEmpty() } ?: ""
+                        }
+                    })
+                })
+                
+                // 设置最大宽度以确保面板不会过宽
+                maximumSize = Dimension(Int.MAX_VALUE, preferredSize.height)
+            }
+            
+            // 添加内部面板
+            add(innerPanel)
         }
     }
 }

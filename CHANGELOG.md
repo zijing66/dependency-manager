@@ -4,6 +4,40 @@
 
 [中文更新日志](CHANGELOG-CN.md)
 
+## [Unreleased]
+
+### Added
+
+- Support for NPM package management
+  - Cache cleanup for npm packages
+  - Prerelease version detection (alpha, beta, rc, dev, etc.)
+  - Package naming pattern detection
+  - Support for node_modules directory clean up
+  - Multiple JavaScript package managers support (npm, yarn, pnpm, cnpm)
+  - Auto-detection of package manager type from project files
+  - Exclusion of dot-prefixed directories (.bin, .pnpm, etc.)
+  - Skip symbolic links in pnpm and yarn structure to avoid duplicate scans
+  - Maximum directory traversal depth limitation to prevent performance issues
+  - Optional display of platform-specific binary files via UI checkbox
+- Support for PIP package management
+  - Cache cleanup for Python packages
+  - Prerelease version detection according to PEP 440
+  - Package naming pattern detection for wheel and sdist packages
+  - Support for Python virtual environments (venv)
+  - Support for Conda environments
+  - Support for Pipenv environments
+  - Auto-detection of Python environment type from project files
+  - Exclusion of special directories (__pycache__, etc.)
+  - Skip symbolic links in virtual environments
+
+### Fixed
+
+- Fixed NPM(YARN) package file detection logic, removed incorrect node_modules directory check
+- Improved package information extraction logic to ensure correct display of versions and match types
+- Optimized display logic to ensure only valid package data is shown
+- Fixed Maven and Gradle package display logic to maintain dependency information consistency
+- Fixed platform-specific binary packages match type display issue, always showing "native" instead of "matched"
+
 ## [1.0.5]
 
 ### Fixed
@@ -62,6 +96,10 @@
 
 ### Added
 
+- Dependency analysis automation
+- Maven local repository cleanup
+- Interactive preview interface
+- Multi-threaded progress monitoring
 - Support deleting failed Maven downloads  
 - Support deleting SNAPSHOT packages and specified groupId/artifactId 
 - Compatibility optimization and search performance optimization
@@ -73,11 +111,9 @@
 - Fixed kotlin.enums package not found error
 - Fixed JVM signature clash in DependencyType enum
 
-## [Unreleased]
+### Improved
 
-### Added
+- Changed package version separator from ":" to "@" for NPM and PIP dependencies
+- Enhanced package information extraction for better display in UI
+- Fixed scoped package name parsing for NPM dependencies (e.g. @scope/package-name)
 
-- Dependency analysis automation
-- Maven local repository cleanup
-- Interactive preview interface
-- Multi-threaded progress monitoring

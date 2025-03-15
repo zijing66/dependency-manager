@@ -10,6 +10,18 @@ abstract class AbstractConfigService(project: Project) : IConfigService {
 
     protected val project: Project = project
 
+    // 最大遍历深度，防止无限递归
+    private val MAX_DIRECTORY_DEPTH = 20
+
+    /**
+     * 获取包名与版本号之间的分隔符
+     * 默认使用冒号作为分隔符，子类可以覆盖此方法提供不同的分隔符
+     * @return 分隔符字符串
+     */
+    protected open fun getPackageNameSeparator(): String {
+        return ":"
+    }
+
     protected fun isValidRepoPath(path: String): Boolean {
         return try {
             val file = File(path)
@@ -25,35 +37,44 @@ abstract class AbstractConfigService(project: Project) : IConfigService {
 
     abstract fun getTargetPackageInfo(rootDir: File, file: File): PkgData
 
+    /**
+     * 扫描仓库目录，根据配置选项查找符合条件的包
+     * @param dir 要扫描的目录
+     * @param onDirFound 当找到符合条件的目录时的回调
+     * @param configOptions 配置选项对象，包含过滤条件
+     */
     abstract fun scanRepository(
         dir: File,
-        onDirFound: (File, String) -> Unit,
-        includeSnapshot: Boolean = false,
-        groupArtifact: String? = null
+        onDirFound: (File, String, PkgData) -> Unit,
+        configOptions: ConfigOptions
     )
-
-    override fun previewCleanup(includeSnapshot: Boolean, groupArtifact: String?): CleanupSummary {
+    
+    /**
+     * 预览清理操作实现
+     * @param configOptions 配置选项，包含 includeSnapshot, showInvalidPackages, showPlatformSpecificBinaries 等设置
+     */
+    override fun previewCleanup(configOptions: ConfigOptions): CleanupSummary {
         val repoDir = File(getLocalRepository(false))
         val previewItems = mutableListOf<CleanupPreview>()
         var totalSize = 0L
 
-        scanRepository(repoDir, { versionDir, matchType ->
+        // 使用新的 scanRepository 接口
+        scanRepository(repoDir, { versionDir, matchType, pkgData ->
             val dirSize = calculateDirSize(versionDir)
-            val (packageName, version, relativePath) = extractPackageInfo(versionDir)
-
+            
             previewItems.add(
                 CleanupPreview(
                     path = versionDir.absolutePath,
-                    packageName = "$packageName:$version",
+                    packageName = pkgData.packageName,
                     fileSize = dirSize,
                     lastModified = versionDir.lastModified(),
                     dependencyType = getDependencyType(),
-                    relativePath = relativePath,
+                    relativePath = pkgData.relativePath,
                     matchType = matchType
                 )
             )
             totalSize += dirSize
-        }, includeSnapshot, groupArtifact)
+        }, configOptions)
 
         return CleanupSummary(
             totalFiles = previewItems.size, totalSize = totalSize, previewItems = previewItems
@@ -116,17 +137,33 @@ abstract class AbstractConfigService(project: Project) : IConfigService {
             return mutableMapOf()
         }
         val pathPkgDataMap = mutableMapOf<String, PkgData>()
-        travelDirectory(rootDir, rootDir, pathPkgDataMap)
+        travelDirectory(rootDir, rootDir, pathPkgDataMap, 0)
         return pathPkgDataMap
     }
 
-    private fun travelDirectory(rootDir: File, startDir: File, packagePathMap: MutableMap<String, PkgData>) {
+    /**
+     * 判断文件夹是否应该被排除
+     * @param dir 要检查的文件夹
+     * @return 如果文件夹应该被排除则返回true
+     */
+    protected abstract fun shouldExcludeDirectory(dir: File): Boolean
+
+    private fun travelDirectory(rootDir: File, startDir: File, packagePathMap: MutableMap<String, PkgData>, depth: Int = 0) {
+        // 防止过深目录遍历
+        if (depth > MAX_DIRECTORY_DEPTH) {
+            return
+        }
+
         startDir.listFiles()?.forEach { file ->
             if (file.isDirectory()) {
-                travelDirectory(rootDir, file, packagePathMap) // 递归调用
+                // 使用shouldExcludeDirectory检查目录是否应被排除
+                if (shouldExcludeDirectory(file)) {
+                    return@forEach
+                }
+                travelDirectory(rootDir, file, packagePathMap, depth + 1) // 递归调用并增加深度计数
             } else {
                 val relativePath = file?.parentFile?.relativeTo(rootDir)?.path?.replace('\\', '/')
-                if (isTargetFile(file)) {
+                if (relativePath?.isNotBlank()!! && isTargetFile(file)) {
                     if (packagePathMap[relativePath]?.invalid == true) {
                         return@forEach
                     }
@@ -149,32 +186,5 @@ abstract class AbstractConfigService(project: Project) : IConfigService {
             }
         }
         return size
-    }
-
-    protected fun extractPackageInfo(file: File): Triple<String, String, String> {
-        val repoPath = getLocalRepository(false).replace('\\', '/')
-        val filePath = file.absolutePath.replace('\\', '/')
-        val relativePath = filePath.removePrefix(repoPath).trimStart('/')
-
-        val components = relativePath.split("/").filter { it.isNotEmpty() }
-
-        return when {
-            components.size >= 3 -> {
-                val version = components.last()
-                val artifactId = components[components.size - 2]
-                val groupId = components.dropLast(2).joinToString(".")
-                Triple("$groupId:$artifactId", version, relativePath)
-            }
-
-            components.size == 2 -> {
-                // 简化的结构：artifactId/version
-                Triple(components[0], components[1], relativePath)
-            }
-
-            else -> {
-                // 异常情况，使用目录名作为标识
-                Triple(file.parentFile?.name ?: "unknown", file.name, relativePath)
-            }
-        }
     }
 }
