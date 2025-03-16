@@ -155,23 +155,27 @@ abstract class AbstractConfigService(project: Project) : IConfigService {
         }
 
         startDir.listFiles()?.forEach { file ->
-            if (file.isDirectory()) {
+            if (file.isDirectory) {
                 // 使用shouldExcludeDirectory检查目录是否应被排除
-                if (shouldExcludeDirectory(file)) {
-                    return@forEach
+                if (!shouldExcludeDirectory(file)) {
+                    travelDirectory(rootDir, file, packagePathMap, depth + 1)
                 }
-                travelDirectory(rootDir, file, packagePathMap, depth + 1) // 递归调用并增加深度计数
             } else {
-                val relativePath = file?.parentFile?.relativeTo(rootDir)?.path?.replace('\\', '/')
-                if (relativePath?.isNotBlank()!! && isTargetFile(file)) {
+                val relativePath = file.parentFile?.relativeTo(rootDir)?.path?.replace('\\', '/')
+                if (relativePath?.isNotBlank() == true && isTargetFile(file)) {
+                    // 避免重复处理已知的无效包
                     if (packagePathMap[relativePath]?.invalid == true) {
                         return@forEach
                     }
-                    val packageInfo = getTargetPackageInfo(rootDir, file)
+                    
+                    // 只在必要时获取包信息
                     if (!packagePathMap.containsKey(relativePath)) {
+                        val packageInfo = getTargetPackageInfo(rootDir, file)
                         packagePathMap[packageInfo.relativePath] = packageInfo
                     }
-                    packagePathMap[packageInfo.relativePath]?.invalid = isTargetInvalidFile(file)
+                    
+                    // 更新无效状态
+                    packagePathMap[relativePath]?.invalid = isTargetInvalidFile(file)
                 }
             }
         }

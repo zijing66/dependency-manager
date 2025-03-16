@@ -12,6 +12,10 @@ import java.util.*
 class GradleConfigService(project: Project) : AbstractConfigService(project) {
 
     private var customRepoPath: String? = null
+    
+    // 正则表达式成员变量
+    private val snapshotDirRegex = Regex("SNAPSHOT")
+    private val hashDirectoryRegex = Regex("[a-f0-9]{40}")
 
     private fun resolveGradleUserHome(): String {
         // 从gradle-wrapper.properties解析GRADLE_USER_HOME
@@ -109,7 +113,7 @@ class GradleConfigService(project: Project) : AbstractConfigService(project) {
 
         pathPkgDataMap.forEach { (path, pkgData) ->
             // 检查是否是SNAPSHOT目录
-            val isSnapshotDir = pkgData.packageName.contains("SNAPSHOT")
+            val isSnapshotDir = pkgData.packageName.contains(snapshotDirRegex)
             
             // 检查是否是失效的包
             val isInvalidPackage = pkgData.invalid
@@ -154,6 +158,13 @@ class GradleConfigService(project: Project) : AbstractConfigService(project) {
     }
 
     override fun shouldExcludeDirectory(dir: File): Boolean {
+        // 对于Gradle缓存目录，通常有固定结构
+        // 例如：[缓存根目录]/caches/modules-2/files-2.1/[group]/[artifact]/[version]/[hash]
+        
+        // 跳过meta数据目录
+        if (dir.name == "metadata" || dir.name == "transforms") {
+            return true
+        }
         return false
     }
 

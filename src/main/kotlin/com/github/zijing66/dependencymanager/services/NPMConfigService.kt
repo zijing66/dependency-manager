@@ -26,6 +26,21 @@ class NPMConfigService(project: Project) : AbstractConfigService(project) {
         "__tests__",     // Jest测试目录
         "coverage"       // 测试覆盖率报告
     )
+    
+    // 正则表达式成员变量
+    private val hashDirectoryRegex = Regex("^[0-9a-f]{40}$")
+    private val scopedPackageRegex = Regex("(@[^+]+)\\+([^@]+)@(.+)")
+    private val standardPackageRegex = Regex("([^@]+)@(.+)")
+    private val pnpmPatternStandard = Regex("node_modules/\\.pnpm/([^@/]+)@([^/]+)/")
+    private val pnpmPatternScoped = Regex("node_modules/\\.pnpm/(@[^+]+)\\+([^@]+)@([^/]+)/")
+    private val packageNameRegex = Regex("\"name\"\\s*:\\s*\"([^\"]+)\"")
+    private val packageVersionRegex = Regex("\"version\"\\s*:\\s*\"([^\"]+)\"")
+    private val tgzNamePattern = Regex("(.*?)-(\\d+\\.\\d+\\.\\d+.*)?\\.tgz")
+    private val zipNamePattern = Regex("(.*?)-(\\d+\\.\\d+\\.\\d+.*?)-(npm-[a-f0-9]+)\\.zip")
+    private val simpleZipPattern = Regex("(.*?)-(\\d+\\.\\d+\\.\\d+.*?)\\.zip")
+    private val snapshotVersionRegex = Regex("\\d+\\.\\d+\\.\\d+-(alpha|beta|rc|dev|next|canary|experimental|snapshot|preview)")
+    private val nativeBinaryRegex = Regex("(win32|darwin|linux)-(x64|arm64|ia32)")
+    private val cacheDirRegex = Regex("cache=(.+)")
 
     /**
      * 判断NPM相关的目录是否应该被排除
@@ -35,25 +50,25 @@ class NPMConfigService(project: Project) : AbstractConfigService(project) {
     override fun shouldExcludeDirectory(dir: File): Boolean {
         // 首先检查是否是缓存目录的主要路径
         val isInCacheRoot = dir.path.contains("npm-cache") || 
-                            dir.path.contains("Yarn/Cache") || 
-                            dir.path.contains(".pnpm-store")
+                          dir.path.contains("Yarn/Cache") || 
+                          dir.path.contains(".pnpm-store")
         
         // 如果是在缓存根目录下，我们应该保留主要的缓存文件夹
         if (isInCacheRoot) {
-            // 仅排除一些明确不需要的文件夹
-            if (dir.name == "examples" || 
-                dir.name == "docs" || 
-                dir.name == "test" || 
-                dir.name == "tests" || 
-                dir.name == "__tests__" || 
-                dir.name == "coverage") {
-                return true
-            }
-            return false
+            return dir.name in commonNpmExclusions
         }
         
-        // 排除以点开头的目录（如.bin, .pnpm等）
+        // 排除以点开头的目录（如.bin）但保留.pnpm
         if (dir.name.startsWith(".") && dir.name != ".pnpm") {
+            return true
+        }
+        
+        // .pnpm目录特殊处理 - 只需要遍历一级子目录
+        if (dir.parentFile?.name == ".pnpm") {
+            // 如果是.pnpm的直接子目录，保留
+            return false
+        } else if (dir.path.contains(".pnpm") && dir.parentFile?.parentFile?.name == ".pnpm") {
+            // 如果是.pnpm的二级及以下子目录，排除
             return true
         }
         
@@ -64,24 +79,18 @@ class NPMConfigService(project: Project) : AbstractConfigService(project) {
         
         // 检查是否是符号链接（特别是pnpm创建的链接）
         try {
-            if (Files.isSymbolicLink(Paths.get(dir.absolutePath))) {
-                // 如果是在node_modules目录下的符号链接，可能需要保留
-                if (!dir.path.contains("node_modules")) {
-                    return true // 非node_modules下的符号链接跳过
+            // 只在node_modules目录下检查符号链接
+            if (dir.path.contains("node_modules")) {
+                if (Files.isSymbolicLink(Paths.get(dir.absolutePath))) {
+                    // 如果是在node_modules目录下的符号链接，可能需要保留
+                    return false
                 }
-            }
-            
-            // 特别处理pnpm的虚拟存储结构，但允许扫描主要的依赖目录
-            if (dir.path.contains("node_modules") && packageManager == NPMPackageManager.PNPM) {
-                // 只排除深层嵌套目录
-                if (dir.path.contains("node_modules/node_modules/node_modules")) {
-                    return true
+                
+                // 特别处理pnpm的虚拟存储结构，但允许扫描主要的依赖目录
+                if (packageManager == NPMPackageManager.PNPM) {
+                    // 只排除深层嵌套目录
+                    return dir.path.contains("node_modules/node_modules/node_modules")
                 }
-            }
-            
-            // 对于yarn berry（pnp模式），我们需要保留缓存目录
-            if (dir.path.contains(".yarn/cache") && dir.path.contains("node_modules")) {
-                return false // 确保扫描
             }
         } catch (e: Exception) {
             // 如果无法确定是否为符号链接，出于安全考虑不排除
@@ -213,7 +222,7 @@ class NPMConfigService(project: Project) : AbstractConfigService(project) {
             }
         }
         
-        return cacheDir
+        return cacheDir.replace("\\", "/")
     }
 
     private fun extractNpmCacheDir(): String? {
@@ -240,7 +249,7 @@ class NPMConfigService(project: Project) : AbstractConfigService(project) {
 
     private fun extractCacheDirFromNpmrc(npmrcFile: File): String? {
         val content = npmrcFile.readText()
-        val cacheDirMatch = Regex("cache=(.+)").find(content)
+        val cacheDirMatch = cacheDirRegex.find(content)
         return cacheDirMatch?.groupValues?.get(1)?.trim()
     }
 
@@ -262,7 +271,7 @@ class NPMConfigService(project: Project) : AbstractConfigService(project) {
                               file.name.endsWith(".zip"))
             NPMPackageManager.PNPM -> 
                 file.isFile && (file.name.endsWith(".tgz") || file.name == "package.json" || 
-                              file.name.contains(Regex("^[0-9a-f]{40}$"))) // pnpm内容寻址存储的哈希文件
+                              file.name.matches(hashDirectoryRegex)) // pnpm内容寻址存储的哈希文件
         }
     }
 
@@ -320,7 +329,7 @@ class NPMConfigService(project: Project) : AbstractConfigService(project) {
                 val packageJsonFile = File(packageDir, "package.json")
                 val version = if (packageJsonFile.exists()) {
                     val content = packageJsonFile.readText()
-                    val versionMatch = Regex("\"version\"\\s*:\\s*\"([^\"]+)\"").find(content)
+                    val versionMatch = packageVersionRegex.find(content)
                     versionMatch?.groupValues?.get(1) ?: "unknown"
                 } else {
                     "unknown"
@@ -341,15 +350,14 @@ class NPMConfigService(project: Project) : AbstractConfigService(project) {
         if (file.name == "package.json") {
             // 从package.json文件中提取名称和版本
             val content = file.readText()
-            val nameMatch = Regex("\"name\"\\s*:\\s*\"([^\"]+)\"").find(content)
-            val versionMatch = Regex("\"version\"\\s*:\\s*\"([^\"]+)\"").find(content)
+            val nameMatch = packageNameRegex.find(content)
+            val versionMatch = packageVersionRegex.find(content)
             
             packageName = nameMatch?.groupValues?.get(1) ?: "unknown"
             version = versionMatch?.groupValues?.get(1) ?: "unknown"
         } else {
             // 从tgz文件名中提取名称和版本
             // 格式通常是: {name}-{version}.tgz
-            val tgzNamePattern = Regex("(.*?)-(\\d+\\.\\d+\\.\\d+.*)?\\.tgz")
             val matchResult = tgzNamePattern.find(file.name)
             
             if (matchResult != null) {
@@ -388,7 +396,6 @@ class NPMConfigService(project: Project) : AbstractConfigService(project) {
             // Yarn 2.x+的缓存文件，处理作用域包
             // 标准包格式: package-name-npm_version-npm-hash.zip
             // 作用域包格式: scope-package-name-npm_version-npm-hash.zip
-            val zipNamePattern = Regex("(.*?)-(\\d+\\.\\d+\\.\\d+.*?)-(npm-[a-f0-9]+)\\.zip")
             val matchResult = zipNamePattern.find(file.name)
             
             if (matchResult != null && matchResult.groupValues.size >= 3) {
@@ -423,8 +430,7 @@ class NPMConfigService(project: Project) : AbstractConfigService(project) {
                 }
             } else {
                 // 如果没有匹配，尝试更简单的模式
-                val simplePattern = Regex("(.*?)-(\\d+\\.\\d+\\.\\d+.*?)\\.zip")
-                val simpleMatch = simplePattern.find(file.name)
+                val simpleMatch = simpleZipPattern.find(file.name)
                 
                 if (simpleMatch != null) {
                     packageName = simpleMatch.groupValues[1]
@@ -437,8 +443,8 @@ class NPMConfigService(project: Project) : AbstractConfigService(project) {
         } else if (file.name == "package.json") {
             // 从package.json读取信息
             val content = file.readText()
-            val nameMatch = Regex("\"name\"\\s*:\\s*\"([^\"]+)\"").find(content)
-            val versionMatch = Regex("\"version\"\\s*:\\s*\"([^\"]+)\"").find(content)
+            val nameMatch = packageNameRegex.find(content)
+            val versionMatch = packageVersionRegex.find(content)
             
             packageName = nameMatch?.groupValues?.get(1) ?: "unknown"
             version = versionMatch?.groupValues?.get(1) ?: "unknown"
@@ -477,15 +483,60 @@ class NPMConfigService(project: Project) : AbstractConfigService(project) {
         
         val packageDir = file.parentFile
         val relativePath = packageDir?.relativeTo(rootDir)?.path?.replace('\\', '/')
+
+        // 专门处理.pnpm目录
+        if (file.path.contains("/.pnpm/") || file.path.contains("\\.pnpm\\")) {
+            // 检查是否是.pnpm直接子目录中的文件
+            val pnpmParentPath = file.path.split(".pnpm").getOrNull(0)
+            if (pnpmParentPath != null) {
+                val pnpmParentFile = File(pnpmParentPath + ".pnpm")
+                val relativeToParent = packageDir?.relativeTo(pnpmParentFile)?.path
+
+                // 直接从.pnpm子目录名称中提取包名和版本
+                if (relativeToParent != null && !relativeToParent.contains("/") && !relativeToParent.contains("\\")) {
+                    // 处理标准包: [package-name]@[version]
+                    // 处理作用域包: @[scope]+[package-name]@[version]
+                    val dirName = relativeToParent
+                    
+                    if (dirName.startsWith("@")) {
+                        // 处理作用域包
+                        val match = scopedPackageRegex.find(dirName)
+                        
+                        if (match != null) {
+                            val scope = match.groupValues[1]
+                            val packageName = match.groupValues[2]
+                            val version = match.groupValues[3]
+                            
+                            return PkgData(
+                                relativePath = relativePath ?: "",
+                                packageName = "$scope/$packageName${getPackageNameSeparator()}$version",
+                                packageDir = packageDir
+                            )
+                        }
+                    } else {
+                        // 处理标准包
+                        val match = standardPackageRegex.find(dirName)
+                        
+                        if (match != null) {
+                            val packageName = match.groupValues[1]
+                            val version = match.groupValues[2]
+                            
+                            return PkgData(
+                                relativePath = relativePath ?: "",
+                                packageName = "$packageName${getPackageNameSeparator()}$version",
+                                packageDir = packageDir
+                            )
+                        }
+                    }
+                }
+            }
+        }
         
         // 分析是否在node_modules目录下
         if (file.path.contains("node_modules")) {
             // 检查是否是pnpm特有的结构
             // 处理标准包: node_modules/.pnpm/package-name@version/
             // 处理作用域包: node_modules/.pnpm/@scope+package-name@version/
-            val pnpmPatternStandard = Regex("node_modules/\\.pnpm/([^@/]+)@([^/]+)/")
-            val pnpmPatternScoped = Regex("node_modules/\\.pnpm/(@[^+]+)\\+([^@]+)@([^/]+)/")
-            
             val pnpmPathNormalized = file.path.replace("\\", "/")
             val matchStandard = pnpmPatternStandard.find(pnpmPathNormalized)
             val matchScoped = pnpmPatternScoped.find(pnpmPathNormalized)
@@ -524,12 +575,12 @@ class NPMConfigService(project: Project) : AbstractConfigService(project) {
         if (file.name == "package.json") {
             // 从package.json读取信息
             val content = file.readText()
-            val nameMatch = Regex("\"name\"\\s*:\\s*\"([^\"]+)\"").find(content)
-            val versionMatch = Regex("\"version\"\\s*:\\s*\"([^\"]+)\"").find(content)
+            val nameMatch = packageNameRegex.find(content)
+            val versionMatch = packageVersionRegex.find(content)
             
             packageName = nameMatch?.groupValues?.get(1) ?: "unknown"
             version = versionMatch?.groupValues?.get(1) ?: "unknown"
-        } else if (file.name.matches(Regex("^[0-9a-f]{40}$"))) {
+        } else if (file.name.matches(hashDirectoryRegex)) {
             // 对于内容寻址存储的哈希文件，尝试找到相关的package.json
             val packageJsonFile = File(packageDir, "package.json")
             if (packageJsonFile.exists()) {
@@ -541,7 +592,6 @@ class NPMConfigService(project: Project) : AbstractConfigService(project) {
             version = file.name
         } else {
             // 处理其他情况（如.tgz文件）
-            val tgzNamePattern = Regex("(.*?)-(\\d+\\.\\d+\\.\\d+.*)?\\.tgz")
             val matchResult = tgzNamePattern.find(file.name)
             
             if (matchResult != null) {
@@ -581,17 +631,20 @@ class NPMConfigService(project: Project) : AbstractConfigService(project) {
             
             // 检查是否是snapshot版本（预发布版本）
             // npm预发布版本通常带有后缀如: alpha, beta, rc, dev等
-            val isSnapshotVersion = pkgData.packageName.contains(Regex("\\d+\\.\\d+\\.\\d+-(alpha|beta|rc|dev|next|canary|experimental|snapshot|preview)"))
+            val isSnapshotVersion = pkgData.packageName.contains(snapshotVersionRegex)
             
             // 检查是否匹配指定的包名
             val isTargetPackage = when {
                 targetPackageName == null -> false // 如果没有指定包名，则不视为匹配
                 pkgData.packageName.startsWith("$targetPackageName$separator") -> true
+                // 前缀匹配包名（不含版本号部分）
                 pkgData.packageName.contains(separator) && 
-                    pkgData.packageName.split(separator)[0] == targetPackageName -> true
+                    pkgData.packageName.split(separator)[0].startsWith(targetPackageName) -> true
                 // 处理带有'/'的包名 - 作用域包的情况，比如@scope/package-name
-                pkgData.packageName.contains("/") && pkgData.packageName.contains(separator) &&
-                    pkgData.packageName.split(separator)[0].split("/").last() == targetPackageName -> true
+                pkgData.packageName.contains("/") && pkgData.packageName.contains(separator) && (
+                    pkgData.packageName.split(separator)[0].startsWith(targetPackageName) || // 前缀匹配整个包名
+                    pkgData.packageName.split(separator)[0].split("/").last().startsWith(targetPackageName) // 前缀匹配无作用域部分
+                ) -> true
                 else -> false
             }
             
@@ -602,7 +655,7 @@ class NPMConfigService(project: Project) : AbstractConfigService(project) {
                             pkgData.packageName.split(separator).size > 1
 
             // 特殊处理win32-x64等平台特定目录
-            val isNativeBinary = pkgData.packageDir.name.matches(Regex("(win32|darwin|linux)-(x64|arm64|ia32)"))
+            val isNativeBinary = pkgData.packageDir.name.matches(nativeBinaryRegex)
             
             // 处理平台特定目录中的二进制文件
             val hasBinaryFiles = if (isNativeBinary) {
@@ -624,8 +677,8 @@ class NPMConfigService(project: Project) : AbstractConfigService(project) {
                 if (packageJsonFile.exists()) {
                     // 从package.json读取包名和版本
                     val content = packageJsonFile.readText()
-                    val nameMatch = Regex("\"name\"\\s*:\\s*\"([^\"]+)\"").find(content)
-                    val versionMatch = Regex("\"version\"\\s*:\\s*\"([^\"]+)\"").find(content)
+                    val nameMatch = packageNameRegex.find(content)
+                    val versionMatch = packageVersionRegex.find(content)
                     
                     val actualPackageName = nameMatch?.groupValues?.get(1) ?: pkgData.packageName.split(separator)[0]
                     val actualVersion = versionMatch?.groupValues?.get(1) ?: 

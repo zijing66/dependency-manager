@@ -15,6 +15,10 @@ import javax.xml.parsers.DocumentBuilderFactory
 class MavenConfigService(project: Project) : AbstractConfigService(project) {
 
     private var customRepoPath: String? = null
+    
+    // 正则表达式成员变量
+    private val lastUpdatedFileRegex = Regex("\\.(jar|pom)\\.lastUpdated$")
+    private val snapshotVersionRegex = Regex("SNAPSHOT$")
 
     private fun getMavenHome(): String {
         // 首先检查环境变量
@@ -64,9 +68,8 @@ class MavenConfigService(project: Project) : AbstractConfigService(project) {
     }
 
     override fun isTargetFile(file: File): Boolean {
-        return file.isFile && (file.name.endsWith(".jar") || file.name.endsWith(".pom") || file.name.endsWith(".jar.lastUpdated") || file.name.endsWith(
-            ".pom.lastUpdated"
-        ))
+        return file.isFile && (file.name.endsWith(".jar") || file.name.endsWith(".pom") || 
+                             file.name.endsWith(".jar.lastUpdated") || file.name.endsWith(".pom.lastUpdated"))
     }
 
     override fun isTargetInvalidFile(file: File): Boolean {
@@ -101,7 +104,7 @@ class MavenConfigService(project: Project) : AbstractConfigService(project) {
 
         pathPkgDataMap.forEach { (path, pkgData) ->
             // 检查是否是SNAPSHOT目录
-            val isSnapshotDir = pkgData.packageName.endsWith("SNAPSHOT")
+            val isSnapshotDir = pkgData.packageName.contains(snapshotVersionRegex)
 
             // 检查是否匹配指定的group/artifact
             val isTargetGroupArtifact = when (targetGroupArtifact?.size) {
@@ -146,6 +149,25 @@ class MavenConfigService(project: Project) : AbstractConfigService(project) {
     }
 
     override fun shouldExcludeDirectory(dir: File): Boolean {
+        // 对于Maven仓库目录，典型结构是：
+        // [仓库根目录]/[group ID分层]/[artifact ID]/[version]
+        
+        // 跳过 .m2 仓库的元数据目录
+        if (dir.name == "_remote.repositories" || dir.name == "_maven.repositories") {
+            return true
+        }
+        
+        // 跳过非包相关的目录
+        if (dir.name == "archetype-catalog" || dir.name == "backups" || dir.name == "temp") {
+            return true
+        }
+        
+        // 如果目录中只有lastUpdated文件，保留它让invalid检查能够发现它，但不需要继续遍历其子目录
+        if (dir.listFiles()?.all { it.name.matches(lastUpdatedFileRegex) } == true) {
+            // 我们不直接返回true，因为需要让这个目录被检查到，但我们设置一个标记来避免遍历其子目录
+            return false
+        }
+        
         return false
     }
 

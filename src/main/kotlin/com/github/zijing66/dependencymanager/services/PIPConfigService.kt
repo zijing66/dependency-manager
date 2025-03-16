@@ -27,6 +27,27 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
         "tests",         // 测试目录
         "test"           // 测试目录
     )
+    
+    // 正则表达式成员变量
+    private val hashDirectoryRegex = Regex("[a-f0-9]{30,}")
+    private val versionNumberRegex = Regex("\\d+(?:\\.\\d+)*.*")
+    private val snapshotVersionRegex = Regex("\\d+\\.\\d+\\.\\d+(-dev\\d*|-a\\d+|-alpha\\d*|-b\\d+|-beta\\d*|-rc\\d+|-pre\\d*|\\.dev\\d*|\\.post\\d*)")
+    private val nativeBinaryRegex = Regex(".*\\.(cp\\d+|py\\d+)-(win|linux|darwin|macosx|manylinux)_(x86_64|amd64|arm64|i686).*")
+    private val wheelPatternRegex = Regex("(.*?)-(\\d+(?:\\.\\d+)*(?:[._-]?(?:dev|a|alpha|b|beta|rc|c|pre|preview|post|rev|r)\\d*)?(?:\\+[a-zA-Z0-9.]*)?)-(.+?)\\.whl$")
+    private val sdistPatternRegex = Regex("(.*?)-(\\d+(?:\\.\\d+)*(?:[._-]?(?:dev|a|alpha|b|beta|rc|c|pre|preview|post|rev|r)\\d*)?(?:\\+[a-zA-Z0-9.]*)?)")
+    private val setupPatternRegex = Regex("(.*?)-(\\d+(?:\\.\\d+)*(?:[._-]?(?:dev|a|alpha|b|beta|rc|c|pre|preview|post|rev|r)\\d*)?(?:\\+[a-zA-Z0-9.]*)?)")
+    private val eggPatternRegex = Regex("(.*?)-(\\d+(?:\\.\\d+)*(?:[._-]?(?:dev|a|alpha|b|beta|rc|c|pre|preview|post|rev|r)\\d*)?(?:\\+[a-zA-Z0-9.]*)?)-py\\d\\.\\d+\\.egg$")
+    private val eggInfoPatternRegex = Regex("(.*?)-(\\d+(?:\\.\\d+)*(?:[._-]?(?:dev|a|alpha|b|beta|rc|c|pre|preview|post|rev|r)\\d*)?(?:\\+[a-zA-Z0-9.]*)?)\\.egg-info$")
+    private val distInfoPatternRegex = Regex("(.*?)-(\\d+(?:\\.\\d+)*(?:[._-]?(?:dev|a|alpha|b|beta|rc|c|pre|preview|post|rev|r)\\d*)?(?:\\+[a-zA-Z0-9.]*)?)\\.dist-info$")
+    private val nameRegex = Regex("Name:\\s*([^\r\n]+)")
+    private val versionRegex = Regex("Version:\\s*([^\r\n]+)")
+    private val setupNameRegex = Regex("name\\s*=\\s*['\"]([^'\"]+)['\"]")
+    private val setupVersionRegex = Regex("version\\s*=\\s*['\"]([^'\"]+)['\"]")
+    private val cacheDirRegex = Regex("cache-dir\\s*=\\s*(.+)")
+    private val tarArchiveRegex = Regex("\\.tar\\.gz$|\\.tar\\.bz2$|\\.tar\\.xz$|\\.zip$")
+    private val pythonPackageNormalizeRegex = Regex("[_.-]+")
+    private val condaNameRegex = Regex("name:\\s*([^\\s]+)")
+    private val condaEnvDirsRegex = Regex("\"envs_dirs\"\\s*:\\s*\\[([^\\]]+)\\]")
 
     /**
      * 判断Python相关的目录是否应该被排除
@@ -34,9 +55,26 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
      * @return 如果目录应该被排除则返回true
      */
     override fun shouldExcludeDirectory(dir: File): Boolean {
-        // 如果是site-packages目录下的文件，应该保留
+        // 如果是site-packages目录下的文件，特殊处理
         if (dir.path.contains("site-packages")) {
-            // 仅排除site-packages下的__pycache__和测试目录
+            // 直接在site-packages下
+            val parentName = dir.parentFile?.name
+            if (parentName == "site-packages") {
+                // 仅排除常见的非包目录
+                return dir.name == "__pycache__" || 
+                       dir.name == "tests" || 
+                       dir.name == "test" || 
+                       dir.name == ".pytest_cache" ||
+                       dir.name.startsWith("pip-") || // pip元数据目录
+                       dir.name.startsWith("setuptools-") // setuptools元数据目录
+            }
+            // 针对dist-info和egg-info目录不再深入遍历，一次性获取元数据
+            else if (dir.parentFile?.name?.endsWith(".dist-info") == true || 
+                     dir.parentFile?.name?.endsWith(".egg-info") == true) {
+                return true
+            }
+            
+            // 处理包内部目录，排除测试和缓存目录
             return dir.name == "__pycache__" || 
                    dir.name == "tests" || 
                    dir.name == "test" || 
@@ -53,46 +91,59 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
             return true
         }
         
-        // 检查是否是符号链接
-        try {
-            if (Files.isSymbolicLink(Paths.get(dir.absolutePath))) {
-                return true // 跳过所有符号链接目录
+        // 特别处理Python虚拟环境中的特殊情况
+        when (environmentType) {
+            PythonEnvironmentType.VENV, PythonEnvironmentType.PIPENV -> {
+                // 虚拟环境中的lib/python*/site-packages/pkg_resources目录可能包含大量符号链接
+                if (dir.path.contains("site-packages") && 
+                    (dir.name == "pkg_resources" || dir.name == ".nspkg-patches")) {
+                    return true
+                }
             }
+            PythonEnvironmentType.CONDA -> {
+                // Conda环境中的pkgs目录包含缓存的包，不需要遍历
+                if (dir.name == "pkgs" && dir.path.contains("conda") && dir.path.contains("envs")) {
+                    return true
+                }
+                // conda-meta目录包含元数据，不需要遍历
+                if (dir.name == "conda-meta") {
+                    return true
+                }
+            }
+            else -> {
+                // 处理系统Python中的情况
+            }
+        }
+        
+        // 处理pip缓存目录，限制遍历只到获取包名版本号的层级
+        if (dir.path.contains("pip/Cache") || 
+            dir.path.contains("pip/cache") || 
+            dir.path.contains("pip\\Cache")) {
             
-            // 特别处理Python虚拟环境中的特殊情况
-            when (environmentType) {
-                PythonEnvironmentType.VENV, PythonEnvironmentType.PIPENV -> {
-                    // 虚拟环境中的lib/python*/site-packages/pkg_resources目录可能包含大量符号链接
-                    if (dir.path.contains("site-packages") && 
-                        (dir.name == "pkg_resources" || dir.name == ".nspkg-patches")) {
-                        return true
-                    }
-                }
-                PythonEnvironmentType.CONDA -> {
-                    // Conda环境中的pkgs目录包含缓存的包，不需要遍历
-                    if (dir.name == "pkgs" && dir.path.contains("conda") && dir.path.contains("envs")) {
-                        return true
-                    }
-                    // conda-meta目录包含元数据，不需要遍历
-                    if (dir.name == "conda-meta") {
-                        return true
-                    }
-                }
-                else -> {
-                    // 处理系统Python中的情况
-                }
+            // pip缓存目录通常是按哈希值组织的
+            if (dir.name.length == 2 && dir.isDirectory) {
+                // 这是缓存根目录的第一级哈希目录（两个字符），保留
+                return false
+            } else if (dir.parentFile?.name?.length == 2 && dir.name.matches(hashDirectoryRegex)) {
+                // 这是第二级哈希目录，包含了实际的包文件，保留
+                return false
+            } else if (dir.path.contains("http") || dir.path.contains("https")) {
+                // 这是源缓存目录，不需要深入遍历
+                return dir.listFiles()?.none { it.isFile && (it.name.endsWith(".whl") || it.name.endsWith(".tar.gz")) } ?: true
             }
-            
-            // 排除一些特殊工具创建的缓存目录
-            if (dir.name.endsWith(".dist-info") && dir.path.contains("site-packages") &&
-                Files.exists(Paths.get(dir.absolutePath, "INSTALLER")) &&
-                Files.readAllLines(Paths.get(dir.absolutePath, "INSTALLER")).contains("pip")) {
-                // 包含pip已安装标记的.dist-info目录不需要遍历内部文件
-                return true
+        }
+        
+        // 排除一些特殊工具创建的缓存目录
+        if (dir.name.endsWith(".dist-info") && dir.path.contains("site-packages")) {
+            try {
+                val installerFile = File(dir, "INSTALLER")
+                if (installerFile.exists() && installerFile.readText().contains("pip")) {
+                    return true
+                }
+            } catch (e: Exception) {
+                // 如果读取失败，不排除该目录
+                return false
             }
-        } catch (e: Exception) {
-            // 如果无法确定是否为符号链接，出于安全考虑不排除
-            return false
         }
         
         return false
@@ -190,7 +241,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
         }
         
         val content = envFile.readText()
-        val nameMatch = Regex("name:\\s*([^\\s]+)").find(content)
+        val nameMatch = condaNameRegex.find(content)
         return nameMatch?.groupValues?.get(1)
     }
 
@@ -206,7 +257,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
             
             if (exitCode == 0 && output.isNotEmpty()) {
                 // 使用简单正则表达式解析JSON输出
-                val envDirsMatch = Regex("\"envs_dirs\"\\s*:\\s*\\[([^\\]]+)\\]").find(output)
+                val envDirsMatch = condaEnvDirsRegex.find(output)
                 val envDirsStr = envDirsMatch?.groupValues?.get(1) ?: return null
                 
                 // 解析环境目录列表
@@ -394,7 +445,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
             }
         }
         
-        return cacheDir
+        return cacheDir.replace("\\", "/")
     }
 
     private fun extractPipConfigCacheDir(): String? {
@@ -418,7 +469,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
 
     private fun extractCacheDirFromPipConfig(pipConfigFile: File): String? {
         val content = pipConfigFile.readText()
-        val cacheDirMatch = Regex("cache-dir\\s*=\\s*(.+)").find(content)
+        val cacheDirMatch = cacheDirRegex.find(content)
         return cacheDirMatch?.groupValues?.get(1)?.trim()
     }
 
@@ -485,41 +536,49 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
     }
 
     override fun getTargetPackageInfo(rootDir: File, file: File): PkgData {
-        // 获取包信息
-        val packageDir = file.parentFile
+        val packageDir = if (file.name == "packages.json") file.parentFile else file.parentFile
         val relativePath = packageDir?.relativeTo(rootDir)?.path?.replace('\\', '/')
         
-        // 解析包名和版本
-        var packageName: String
-        var version: String
+        // 根据不同文件类型进行处理
+        var packageName: String = "unknown"
+        var version: String = "unknown"
         
         when {
-            // Wheel 格式
             file.name.endsWith(".whl") -> {
                 // 从wheel文件名解析包名和版本
                 // 格式通常是: {package_name}-{version}-{python_tag}-{abi_tag}-{platform_tag}.whl
                 // 示例: numpy-1.24.3-cp39-cp39-win_amd64.whl
-                val wheelPattern = Regex("(.*?)-(\\d+(?:\\.\\d+)*(?:[._-]?(?:dev|a|alpha|b|beta|rc|c|pre|preview|post|rev|r)\\d*)?(?:\\+[a-zA-Z0-9.]*)?)-(.+?)\\.whl$")
-                val matchResult = wheelPattern.find(file.name)
-                
-                if (matchResult != null) {
-                    packageName = matchResult.groupValues[1]
-                    version = matchResult.groupValues[2]
-                } else {
-                    // 兼容性处理：尝试基础拆分
-                    val parts = file.nameWithoutExtension.split("-")
-                    if (parts.size >= 2) {
-                        packageName = parts[0]
-                        // 检查第二部分是否像个版本号
-                        version = if (parts[1].matches(Regex("\\d+(?:\\.\\d+)*.*"))) {
+                val wheelFilename = file.name
+                val parts = wheelFilename.split("-")
+                if (wheelFilename.endsWith(".whl") && parts.size >= 3) {
+                    val match = wheelPatternRegex.find(wheelFilename)
+                    
+                    if (match != null) {
+                        packageName = match.groupValues[1]
+                        version = if (parts[1].matches(versionNumberRegex)) {
                             parts[1]
                         } else {
                             "unknown"
                         }
                     } else {
-                        packageName = file.nameWithoutExtension
-                        version = "unknown"
+                        // 兼容性处理：尝试基础拆分
+                        val nameParts = file.nameWithoutExtension.split("-")
+                        if (nameParts.size >= 2) {
+                            packageName = nameParts[0]
+                            // 检查第二部分是否像个版本号
+                            version = if (nameParts[1].matches(versionNumberRegex)) {
+                                nameParts[1]
+                            } else {
+                                "unknown"
+                            }
+                        } else {
+                            packageName = file.nameWithoutExtension
+                            version = "unknown"
+                        }
                     }
+                } else {
+                    packageName = file.nameWithoutExtension
+                    version = "unknown"
                 }
             }
             // 源码分发包和其他压缩包格式
@@ -531,18 +590,17 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                 
                 // 获取基本文件名（去掉所有压缩扩展名）
                 val baseName = file.name
-                    .replace(Regex("\\.tar\\.gz$|\\.tar\\.bz2$|\\.tar\\.xz$|\\.zip$"), "")
+                    .replace(tarArchiveRegex, "")
                 
-                val sdistPattern = Regex("(.*?)-(\\d+(?:\\.\\d+)*(?:[._-]?(?:dev|a|alpha|b|beta|rc|c|pre|preview|post|rev|r)\\d*)?(?:\\+[a-zA-Z0-9.]*)?)")
-                val matchResult = sdistPattern.find(baseName)
+                val sdistMatch = sdistPatternRegex.find(baseName)
                 
-                if (matchResult != null) {
-                    packageName = matchResult.groupValues[1]
-                    version = matchResult.groupValues[2]
+                if (sdistMatch != null) {
+                    packageName = sdistMatch.groupValues[1]
+                    version = sdistMatch.groupValues[2]
                 } else {
                     // 兼容模式：尝试更简单的拆分
                     val nameParts = baseName.split("-")
-                    if (nameParts.size >= 2 && nameParts.last().matches(Regex("\\d+(?:\\.\\d+)*.*"))) {
+                    if (nameParts.size >= 2 && nameParts.last().matches(versionNumberRegex)) {
                         packageName = nameParts.dropLast(1).joinToString("-")
                         version = nameParts.last()
                     } else {
@@ -555,32 +613,42 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
             file.name.endsWith(".egg") -> {
                 // .egg 文件格式: {package_name}-{version}-{python_tag}.egg
                 // 示例: SQLAlchemy-1.4.46-py3.9.egg
-                val eggPattern = Regex("(.*?)-(\\d+(?:\\.\\d+)*(?:[._-]?(?:dev|a|alpha|b|beta|rc|c|pre|preview|post|rev|r)\\d*)?(?:\\+[a-zA-Z0-9.]*)?)-py\\d\\.\\d+\\.egg$")
-                val matchResult = eggPattern.find(file.name)
-                
-                if (matchResult != null) {
-                    packageName = matchResult.groupValues[1]
-                    version = matchResult.groupValues[2]
-                } else {
-                    // 尝试更简单的匹配模式
-                    val simpleParts = file.nameWithoutExtension.split("-")
-                    if (simpleParts.size >= 2) {
-                        // 检查倒数第二部分是否是版本号
-                        val possibleVersionIndex = if (simpleParts.last().startsWith("py")) 
-                            simpleParts.size - 2 else simpleParts.size - 1
-                        
-                        if (possibleVersionIndex >= 1 && 
-                            simpleParts[possibleVersionIndex].matches(Regex("\\d+(?:\\.\\d+)*.*"))) {
-                            packageName = simpleParts.subList(0, possibleVersionIndex).joinToString("-")
-                            version = simpleParts[possibleVersionIndex]
+                val eggFilename = file.name
+                val parts = eggFilename.split("-")
+                if (eggFilename.endsWith(".egg") && parts.size >= 3) {
+                    val eggMatch = eggPatternRegex.find(eggFilename)
+                    
+                    if (eggMatch != null) {
+                        packageName = eggMatch.groupValues[1]
+                        version = if (parts[1].matches(versionNumberRegex)) {
+                            parts[1]
+                        } else {
+                            "unknown"
+                        }
+                    } else {
+                        // 尝试更简单的匹配模式
+                        val simpleParts = file.nameWithoutExtension.split("-")
+                        if (simpleParts.size >= 2) {
+                            // 检查倒数第二部分是否是版本号
+                            val possibleVersionIndex = if (simpleParts.last().startsWith("py")) 
+                                simpleParts.size - 2 else simpleParts.size - 1
+                            
+                            if (possibleVersionIndex >= 1 && 
+                                simpleParts[possibleVersionIndex].matches(versionNumberRegex)) {
+                                packageName = simpleParts.subList(0, possibleVersionIndex).joinToString("-")
+                                version = simpleParts[possibleVersionIndex]
+                            } else {
+                                packageName = file.nameWithoutExtension
+                                version = "unknown"
+                            }
                         } else {
                             packageName = file.nameWithoutExtension
                             version = "unknown"
                         }
-                    } else {
-                        packageName = file.nameWithoutExtension
-                        version = "unknown"
                     }
+                } else {
+                    packageName = file.nameWithoutExtension
+                    version = "unknown"
                 }
             }
             // egg-info 目录或文件
@@ -588,53 +656,60 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                 // 解析egg-info目录名
                 // 格式通常是: {package_name}-{version}.egg-info
                 // 示例: SQLAlchemy-1.4.46.egg-info
-                val eggInfoPattern = Regex("(.*?)-(\\d+(?:\\.\\d+)*(?:[._-]?(?:dev|a|alpha|b|beta|rc|c|pre|preview|post|rev|r)\\d*)?(?:\\+[a-zA-Z0-9.]*)?)\\.egg-info$")
-                val matchResult = eggInfoPattern.find(file.name)
-                
-                if (matchResult != null) {
-                    packageName = matchResult.groupValues[1]
-                    version = matchResult.groupValues[2]
-                } else {
-                    // 检查是否有PKG-INFO文件，可以从中读取更准确的信息
-                    val pkgInfoFile = File(packageDir, "PKG-INFO") 
-                    if (pkgInfoFile.exists()) {
-                        try {
-                            val pkgInfoContent = pkgInfoFile.readText()
-                            val nameMatch = Regex("Name:\\s*([^\r\n]+)").find(pkgInfoContent)
-                            val versionMatch = Regex("Version:\\s*([^\r\n]+)").find(pkgInfoContent)
-                            
-                            if (nameMatch != null) {
-                                packageName = nameMatch.groupValues[1].trim()
-                            } else {
-                                packageName = file.name.removeSuffix(".egg-info")
+                val eggInfoFilename = file.name
+                val parts = eggInfoFilename.split("-")
+                if (eggInfoFilename.endsWith(".egg-info") && parts.size >= 2) {
+                    val eggInfoMatch = eggInfoPatternRegex.find(eggInfoFilename)
+                    
+                    if (eggInfoMatch != null) {
+                        packageName = eggInfoMatch.groupValues[1]
+                        version = if (parts[1].matches(versionNumberRegex)) {
+                            parts[1]
+                        } else {
+                            "unknown"
+                        }
+                    } else {
+                        // 检查是否有PKG-INFO文件，可以从中读取更准确的信息
+                        val pkgInfoFile = File(packageDir, "PKG-INFO") 
+                        if (pkgInfoFile.exists()) {
+                            try {
+                                val pkgInfoContent = pkgInfoFile.readText()
+                                val nameMatch = nameRegex.find(pkgInfoContent)
+                                val versionMatch = versionRegex.find(pkgInfoContent)
+                                
+                                if (nameMatch != null) {
+                                    packageName = nameMatch.groupValues[1].trim()
+                                } else {
+                                    packageName = file.name.removeSuffix(".egg-info")
+                                }
+                                
+                                if (versionMatch != null) {
+                                    version = versionMatch.groupValues[1].trim()
+                                } else {
+                                    version = "unknown"
+                                }
+                            } catch (e: Exception) {
+                                // 如果读取失败，继续使用文件名解析
+                                // 兼容模式：尝试简单拆分
+                                val nameParts = file.name.removeSuffix(".egg-info").split("-")
+                                if (nameParts.size >= 2 && nameParts.last().matches(versionNumberRegex)) {
+                                    packageName = nameParts.dropLast(1).joinToString("-")
+                                    version = nameParts.last()
+                                } else {
+                                    packageName = file.name.removeSuffix(".egg-info")
+                                    version = "unknown"
+                                }
                             }
-                            
-                            if (versionMatch != null) {
-                                version = versionMatch.groupValues[1].trim()
-                            } else {
-                                version = "unknown"
-                            }
-                        } catch (e: Exception) {
-                            // 如果读取失败，继续使用文件名解析
+                        } else {
                             // 兼容模式：尝试简单拆分
                             val nameParts = file.name.removeSuffix(".egg-info").split("-")
-                            if (nameParts.size >= 2 && nameParts.last().matches(Regex("\\d+(?:\\.\\d+)*.*"))) {
+                            if (nameParts.size >= 2 && nameParts.last().matches(versionNumberRegex)) {
                                 packageName = nameParts.dropLast(1).joinToString("-")
                                 version = nameParts.last()
                             } else {
                                 packageName = file.name.removeSuffix(".egg-info")
                                 version = "unknown"
                             }
-                        }
-                    } else {
-                        // 兼容模式：尝试简单拆分
-                        val nameParts = file.name.removeSuffix(".egg-info").split("-")
-                        if (nameParts.size >= 2 && nameParts.last().matches(Regex("\\d+(?:\\.\\d+)*.*"))) {
-                            packageName = nameParts.dropLast(1).joinToString("-")
-                            version = nameParts.last()
-                        } else {
-                            packageName = file.name.removeSuffix(".egg-info")
-                            version = "unknown"
                         }
                     }
                 }
@@ -645,12 +720,12 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                 // 格式通常是: {package_name}-{version}.dist-info
                 // 示例: flask-2.2.3.dist-info
                 val dirName = if (file.name.endsWith(".dist-info")) file.name else file.parentFile.name
-                val distInfoPattern = Regex("(.*?)-(\\d+(?:\\.\\d+)*(?:[._-]?(?:dev|a|alpha|b|beta|rc|c|pre|preview|post|rev|r)\\d*)?(?:\\+[a-zA-Z0-9.]*)?)\\.dist-info$")
-                val matchResult = distInfoPattern.find(dirName)
+                val distInfoFilename = if (file.name.endsWith(".dist-info")) file.name else file.parentFile.name
+                val distInfoMatch = distInfoPatternRegex.find(distInfoFilename)
                 
-                if (matchResult != null) {
-                    packageName = matchResult.groupValues[1]
-                    version = matchResult.groupValues[2]
+                if (distInfoMatch != null) {
+                    packageName = distInfoMatch.groupValues[1]
+                    version = distInfoMatch.groupValues[2]
                 } else {
                     // 尝试从METADATA文件获取信息
                     val metadataFile = if (file.name.endsWith(".dist-info")) {
@@ -662,8 +737,8 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                     if (metadataFile.exists()) {
                         try {
                             val metadataContent = metadataFile.readText()
-                            val nameMatch = Regex("Name:\\s*([^\r\n]+)").find(metadataContent)
-                            val versionMatch = Regex("Version:\\s*([^\r\n]+)").find(metadataContent)
+                            val nameMatch = nameRegex.find(metadataContent)
+                            val versionMatch = versionRegex.find(metadataContent)
                             
                             if (nameMatch != null) {
                                 packageName = nameMatch.groupValues[1].trim()
@@ -680,7 +755,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                             // 如果读取失败，继续使用目录名解析
                             // 兼容模式：尝试简单拆分
                             val nameParts = dirName.removeSuffix(".dist-info").split("-")
-                            if (nameParts.size >= 2 && nameParts.last().matches(Regex("\\d+(?:\\.\\d+)*.*"))) {
+                            if (nameParts.size >= 2 && nameParts.last().matches(versionNumberRegex)) {
                                 packageName = nameParts.dropLast(1).joinToString("-")
                                 version = nameParts.last()
                             } else {
@@ -691,7 +766,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                     } else {
                         // 兼容模式：尝试简单拆分
                         val nameParts = dirName.removeSuffix(".dist-info").split("-")
-                        if (nameParts.size >= 2 && nameParts.last().matches(Regex("\\d+(?:\\.\\d+)*.*"))) {
+                        if (nameParts.size >= 2 && nameParts.last().matches(versionNumberRegex)) {
                             packageName = nameParts.dropLast(1).joinToString("-")
                             version = nameParts.last()
                         } else {
@@ -706,18 +781,18 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                 if (file.parentFile != null && file.parentFile.name.endsWith(".dist-info")) {
                     // 使用父目录解析
                     val dirName = file.parentFile.name
-                    val distInfoPattern = Regex("(.*?)-(\\d+(?:\\.\\d+)*(?:[._-]?(?:dev|a|alpha|b|beta|rc|c|pre|preview|post|rev|r)\\d*)?(?:\\+[a-zA-Z0-9.]*)?)\\.dist-info$")
-                    val matchResult = distInfoPattern.find(dirName)
+                    val distInfoFilename = if (file.name.endsWith(".dist-info")) file.name else file.parentFile.name
+                    val distInfoMatch = distInfoPatternRegex.find(distInfoFilename)
                     
-                    if (matchResult != null) {
-                        packageName = matchResult.groupValues[1]
-                        version = matchResult.groupValues[2]
+                    if (distInfoMatch != null) {
+                        packageName = distInfoMatch.groupValues[1]
+                        version = distInfoMatch.groupValues[2]
                     } else if (file.name == "METADATA") {
                         // 尝试从METADATA文件获取信息
                         try {
                             val metadataContent = file.readText()
-                            val nameMatch = Regex("Name:\\s*([^\r\n]+)").find(metadataContent)
-                            val versionMatch = Regex("Version:\\s*([^\r\n]+)").find(metadataContent)
+                            val nameMatch = nameRegex.find(metadataContent)
+                            val versionMatch = versionRegex.find(metadataContent)
                             
                             packageName = nameMatch?.groupValues?.get(1)?.trim() ?: dirName.removeSuffix(".dist-info")
                             version = versionMatch?.groupValues?.get(1)?.trim() ?: "unknown"
@@ -729,7 +804,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                     } else {
                         // 其他文件，使用目录名
                         val nameParts = dirName.removeSuffix(".dist-info").split("-")
-                        if (nameParts.size >= 2 && nameParts.last().matches(Regex("\\d+(?:\\.\\d+)*.*"))) {
+                        if (nameParts.size >= 2 && nameParts.last().matches(versionNumberRegex)) {
                             packageName = nameParts.dropLast(1).joinToString("-")
                             version = nameParts.last()
                         } else {
@@ -748,8 +823,8 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                 // 尝试从PKG-INFO文件内容解析
                 try {
                     val pkgInfoContent = file.readText()
-                    val nameMatch = Regex("Name:\\s*([^\r\n]+)").find(pkgInfoContent)
-                    val versionMatch = Regex("Version:\\s*([^\r\n]+)").find(pkgInfoContent)
+                    val nameMatch = nameRegex.find(pkgInfoContent)
+                    val versionMatch = versionRegex.find(pkgInfoContent)
                     
                     packageName = nameMatch?.groupValues?.get(1)?.trim() ?: file.parentFile.name
                     version = versionMatch?.groupValues?.get(1)?.trim() ?: "unknown"
@@ -758,12 +833,12 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                     if (file.parentFile != null) {
                         val parentName = file.parentFile.name
                         if (parentName.endsWith(".egg-info") || parentName == "EGG-INFO") {
-                            val eggInfoPattern = Regex("(.*?)-(\\d+(?:\\.\\d+)*(?:[._-]?(?:dev|a|alpha|b|beta|rc|c|pre|preview|post|rev|r)\\d*)?(?:\\+[a-zA-Z0-9.]*)?)\\.egg-info$")
-                            val matchResult = eggInfoPattern.find(parentName)
+                            val eggInfoFilename = if (parentName.endsWith(".egg-info")) parentName else "$parentName.egg-info"
+                            val eggInfoMatch = eggInfoPatternRegex.find(eggInfoFilename)
                             
-                            if (matchResult != null) {
-                                packageName = matchResult.groupValues[1]
-                                version = matchResult.groupValues[2]
+                            if (eggInfoMatch != null) {
+                                packageName = eggInfoMatch.groupValues[1]
+                                version = eggInfoMatch.groupValues[2]
                             } else {
                                 packageName = parentName.removeSuffix(".egg-info")
                                 version = "unknown"
@@ -771,7 +846,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                         } else {
                             // 尝试从目录名解析
                             val dirParts = parentName.split("-")
-                            if (dirParts.size >= 2 && dirParts.last().matches(Regex("\\d+(?:\\.\\d+)*.*"))) {
+                            if (dirParts.size >= 2 && dirParts.last().matches(versionNumberRegex)) {
                                 packageName = dirParts.dropLast(1).joinToString("-")
                                 version = dirParts.last()
                             } else {
@@ -789,24 +864,24 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
             file.name == "setup.py" && file.parentFile?.name?.contains("-") == true -> {
                 // 尝试从目录名解析
                 val dirName = file.parentFile.name
-                val setupPattern = Regex("(.*?)-(\\d+(?:\\.\\d+)*(?:[._-]?(?:dev|a|alpha|b|beta|rc|c|pre|preview|post|rev|r)\\d*)?(?:\\+[a-zA-Z0-9.]*)?)")
-                val matchResult = setupPattern.find(dirName)
+                val setupFilename = if (file.name.endsWith(".py")) file.name else file.nameWithoutExtension
+                val setupMatch = setupPatternRegex.find(setupFilename)
                 
-                if (matchResult != null) {
-                    packageName = matchResult.groupValues[1]
-                    version = matchResult.groupValues[2]
+                if (setupMatch != null) {
+                    packageName = setupMatch.groupValues[1]
+                    version = setupMatch.groupValues[2]
                 } else {
                     // 尝试解析源代码
                     try {
                         val setupContent = file.readText()
-                        val nameMatch = Regex("name\\s*=\\s*['\"]([^'\"]+)['\"]").find(setupContent)
-                        val versionMatch = Regex("version\\s*=\\s*['\"]([^'\"]+)['\"]").find(setupContent)
+                        val nameMatch = setupNameRegex.find(setupContent)
+                        val versionMatch = setupVersionRegex.find(setupContent)
                         
                         packageName = nameMatch?.groupValues?.get(1)?.trim() ?: dirName
                         version = versionMatch?.groupValues?.get(1)?.trim() ?: "unknown"
                     } catch (e: Exception) {
                         val dirParts = dirName.split("-")
-                        if (dirParts.size >= 2 && dirParts.last().matches(Regex("\\d+(?:\\.\\d+)*.*"))) {
+                        if (dirParts.size >= 2 && dirParts.last().matches(versionNumberRegex)) {
                             packageName = dirParts.dropLast(1).joinToString("-")
                             version = dirParts.last()
                         } else {
@@ -823,23 +898,23 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                     val parentName = file.parentFile.name
                     
                     if (parentName.endsWith(".egg-info")) {
-                        val eggInfoPattern = Regex("(.*?)-(\\d+(?:\\.\\d+)*(?:[._-]?(?:dev|a|alpha|b|beta|rc|c|pre|preview|post|rev|r)\\d*)?(?:\\+[a-zA-Z0-9.]*)?)\\.egg-info$")
-                        val matchResult = eggInfoPattern.find(parentName)
+                        val eggInfoFilename = if (parentName.endsWith(".egg-info")) parentName else "$parentName.egg-info"
+                        val eggInfoMatch = eggInfoPatternRegex.find(eggInfoFilename)
                         
-                        if (matchResult != null) {
-                            packageName = matchResult.groupValues[1]
-                            version = matchResult.groupValues[2]
+                        if (eggInfoMatch != null) {
+                            packageName = eggInfoMatch.groupValues[1]
+                            version = eggInfoMatch.groupValues[2]
                         } else {
                             packageName = parentName.removeSuffix(".egg-info")
                             version = "unknown"
                         }
                     } else if (parentName.endsWith(".dist-info")) {
-                        val distInfoPattern = Regex("(.*?)-(\\d+(?:\\.\\d+)*(?:[._-]?(?:dev|a|alpha|b|beta|rc|c|pre|preview|post|rev|r)\\d*)?(?:\\+[a-zA-Z0-9.]*)?)\\.dist-info$")
-                        val matchResult = distInfoPattern.find(parentName)
+                        val distInfoFilename = if (file.name.endsWith(".dist-info")) file.name else file.parentFile.name
+                        val distInfoMatch = distInfoPatternRegex.find(distInfoFilename)
                         
-                        if (matchResult != null) {
-                            packageName = matchResult.groupValues[1]
-                            version = matchResult.groupValues[2]
+                        if (distInfoMatch != null) {
+                            packageName = distInfoMatch.groupValues[1]
+                            version = distInfoMatch.groupValues[2]
                         } else {
                             packageName = parentName.removeSuffix(".dist-info")
                             version = "unknown"
@@ -860,8 +935,8 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                 if (metadataFile.exists()) {
                     try {
                         val pkgInfoContent = metadataFile.readText()
-                        val nameMatch = Regex("Name:\\s*([^\r\n]+)").find(pkgInfoContent)
-                        val versionMatch = Regex("Version:\\s*([^\r\n]+)").find(pkgInfoContent)
+                        val nameMatch = nameRegex.find(pkgInfoContent)
+                        val versionMatch = versionRegex.find(pkgInfoContent)
                         
                         packageName = nameMatch?.groupValues?.get(1)?.trim() ?: file.nameWithoutExtension
                         version = versionMatch?.groupValues?.get(1)?.trim() ?: "unknown"
@@ -872,12 +947,11 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                 } else {
                     // 尝试从目录名解析
                     if (packageDir != null && packageDir.name.contains("-")) {
-                        val dirPattern = Regex("(.*?)-(\\d+(?:\\.\\d+)*(?:[._-]?(?:dev|a|alpha|b|beta|rc|c|pre|preview|post|rev|r)\\d*)?(?:\\+[a-zA-Z0-9.]*)?)")
-                        val matchResult = dirPattern.find(packageDir.name)
+                        val dirMatch = sdistPatternRegex.find(packageDir.name)
                         
-                        if (matchResult != null) {
-                            packageName = matchResult.groupValues[1]
-                            version = matchResult.groupValues[2]
+                        if (dirMatch != null) {
+                            packageName = dirMatch.groupValues[1]
+                            version = dirMatch.groupValues[2]
                         } else {
                             packageName = file.nameWithoutExtension
                             version = "unknown"
@@ -891,7 +965,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
         }
         
         // 规范化包名（PEP 503：把连字符、下划线、点都转换为连字符）
-        val normalizedPackageName = packageName.lowercase().replace(Regex("[_.-]+"), "-")
+        val normalizedPackageName = packageName.lowercase().replace(pythonPackageNormalizeRegex, "-")
         
         return PkgData(
             relativePath = relativePath ?: "",
@@ -912,69 +986,55 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
         onDirFound: (File, String, PkgData) -> Unit, 
         configOptions: ConfigOptions
     ) {
-        val targetPackageName = configOptions.targetPackage.takeIf { it.isNotEmpty() }
-        val separator = getPackageNameSeparator()
-
+        val targetPackageName = configOptions.targetPackage.takeIf { it.isNotEmpty() }?.lowercase()
         val pathPkgDataMap = fetchPkgMap(dir)
 
         pathPkgDataMap.forEach { (path, pkgData) ->
-            // 检查是否是失效的包文件
+            // 检查是否是invalid文件（损坏或未完成的下载）
             val isInvalidPackage = pkgData.invalid
-
-            // 检查是否是snapshot版本（预发布版本）
-            // PEP 440定义的预发布标识符
-            val isSnapshotVersion = pkgData.packageName.contains(Regex("\\d+\\.\\d+\\.\\d+(-dev\\d*|-a\\d+|-alpha\\d*|-b\\d+|-beta\\d*|-rc\\d+|-pre\\d*|\\.dev\\d*|\\.post\\d*)"))
+            
+            // 检查是否是snapshot版本（预发布版本：含有dev, a, alpha, b, beta, rc等标记）
+            val isSnapshotVersion = pkgData.packageName.contains(snapshotVersionRegex)
             
             // 检查是否匹配指定的包名
-            val isTargetPackage = targetPackageName != null && 
-                                 (pkgData.packageName.startsWith("$targetPackageName$separator") || 
-                                  (pkgData.packageName.contains(separator) && 
-                                   pkgData.packageName.split(separator)[0] == targetPackageName))
+            val packageNameParts = pkgData.packageName.split(":")
+            val packageNameOnly = packageNameParts[0].lowercase()
             
-            // 检查是否包含版本号
-            val hasVersion = pkgData.packageName.contains(separator) && 
-                            !pkgData.packageName.endsWith("${separator}unknown") && 
-                            !pkgData.packageName.endsWith(separator)
+            // Python包通常有下划线和连字符的变体，所以我们需要规范化进行比较
+            val normalizedPackageName = packageNameOnly.replace(pythonPackageNormalizeRegex, "-")
+            val normalizedTargetName = targetPackageName?.replace(pythonPackageNormalizeRegex, "-") ?: ""
             
-            // 特殊处理平台特定目录，例如.cp38-win_amd64等后缀
-            val isNativeBinary = pkgData.packageDir.name.matches(Regex(".*\\.(cp\\d+|py\\d+)-(win|linux|darwin|macosx|manylinux)_(x86_64|amd64|arm64|i686).*"))
+            val isTargetPackage = when {
+                targetPackageName == null -> false // 如果没有指定包名，则不视为匹配
+                normalizedPackageName.startsWith(normalizedTargetName) -> true // 前缀匹配
+                packageNameOnly.endsWith(".$targetPackageName") -> true  // 处理子包情况
+                packageNameOnly.startsWith("$targetPackageName.") -> true  // 处理父包情况
+                else -> false
+            }
             
-            // 如果是平台特定目录，并且有效，补充包名信息
-            val adjustedPkgData = if (isNativeBinary && configOptions.showPlatformSpecificBinaries) {
-                // 从目录名中提取信息
-                val parts = pkgData.packageName.split(separator)
-                val name = parts[0]
-                val version = if (parts.size > 1) parts[1] else "unknown"
-                
-                // 添加平台信息
-                PkgData(
-                    relativePath = pkgData.relativePath,
-                    packageName = "$name${separator}$version (${pkgData.packageDir.name})",
-                    packageDir = pkgData.packageDir,
-                    invalid = pkgData.invalid
-                )
-            } else pkgData
+            // 处理平台特定的二进制包（wheel包）
+            val isNativeBinary = pkgData.packageDir.name.matches(nativeBinaryRegex)
             
-            // 筛选逻辑：包含有明确匹配类型的包（指定的目标包名、快照版本、无效包或平台特定二进制文件）
+            // 筛选逻辑
             val shouldInclude = when {
-                targetPackageName != null && isTargetPackage -> true
-                configOptions.showPlatformSpecificBinaries && isNativeBinary -> true
-                configOptions.includeSnapshot && isSnapshotVersion -> true
                 configOptions.showInvalidPackages && isInvalidPackage -> true
+                configOptions.targetPackage.isNotEmpty() && isTargetPackage -> true
+                configOptions.includeSnapshot && isSnapshotVersion -> true
+                configOptions.showPlatformSpecificBinaries && isNativeBinary -> true
                 else -> false
             }
 
             // 设置匹配类型
             val matchType = when {
-                targetPackageName != null && isTargetPackage -> "matched"
-                configOptions.showPlatformSpecificBinaries && isNativeBinary -> "native"
-                configOptions.includeSnapshot && isSnapshotVersion -> "prerelease"
-                configOptions.showInvalidPackages && isInvalidPackage -> "invalid"
-                else -> "unknown" // 理论上不应该有unknown类型被包含
+                isInvalidPackage -> "invalid"
+                isTargetPackage -> "matched"
+                isSnapshotVersion -> "prerelease"
+                isNativeBinary -> "platform"
+                else -> "unknown"
             }
 
             if (shouldInclude) {
-                onDirFound(adjustedPkgData.packageDir, matchType, adjustedPkgData)
+                onDirFound(pkgData.packageDir, matchType, pkgData)
             }
         }
     }
@@ -1011,7 +1071,8 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
             // 使用简单的通配符匹配
             val globPattern = pattern.replace("*", "?").replace("?", "*")
             val matchingDirs = File(pattern.substringBeforeLast("/")).listFiles { file ->
-                file.isDirectory && file.name.matches(Regex(globPattern.substringAfterLast("/").replace("*", ".*")))
+                val regex = globPattern.substringAfterLast("/").replace("*", ".*")
+                file.isDirectory && file.name.matches(Regex(regex))
             }
             
             if (matchingDirs?.isNotEmpty() == true) {
