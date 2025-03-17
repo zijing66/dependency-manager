@@ -1,9 +1,6 @@
 package com.github.zijing66.dependencymanager.ui
 
-import com.github.zijing66.dependencymanager.models.CleanupPreview
-import com.github.zijing66.dependencymanager.models.CleanupSummary
-import com.github.zijing66.dependencymanager.models.DependencyType
-import com.github.zijing66.dependencymanager.models.ConfigOptions
+import com.github.zijing66.dependencymanager.models.*
 import com.github.zijing66.dependencymanager.services.*
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.Project
@@ -127,6 +124,16 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
     private lateinit var groupArtifactField: JTextField
     private lateinit var progressBar: JProgressBar
     private lateinit var statusLabel: JLabel
+    // 添加Python环境类型相关变量
+    private lateinit var pythonEnvTypeGroup: ButtonGroup
+    private lateinit var systemRadio: JRadioButton
+    private lateinit var venvRadio: JRadioButton
+    private lateinit var condaRadio: JRadioButton
+    private lateinit var pipenvRadio: JRadioButton
+    private lateinit var pathField: JTextField
+    private var currentRepoPath: String = ""
+    private var refreshButton: JButton? = null
+    private var pythonEnvTypePanel: JPanel? = null
 
     init {
         previewModel = PreviewTableModel()
@@ -298,7 +305,7 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
                 continue
             }
             func()
-            break; // 只执行一次
+            break // 只执行一次
          }
         return
     }
@@ -371,12 +378,73 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
         }
 
         // 添加仓库路径显示
-        var currentRepoPath = configService.getLocalRepository(false)
+        currentRepoPath = configService.getLocalRepository(false)
 
         val pathStatusLabel = JLabel().apply {
             foreground = JBColor.RED
             font = font.deriveFont(font.size2D - 1f)
             alignmentX = Component.LEFT_ALIGNMENT  // 确保标签左对齐
+        }
+
+        // 为PIP模式添加Python环境类型选择面板
+        if (chosenDependencyType == DependencyType.PIP) {
+            pythonEnvTypePanel = JPanel().apply {
+                layout = BoxLayout(this, BoxLayout.X_AXIS)
+                alignmentX = Component.LEFT_ALIGNMENT
+                border = BorderFactory.createTitledBorder("Python Environment Type")
+                
+                // 创建单选按钮组
+                pythonEnvTypeGroup = ButtonGroup()
+                
+                systemRadio = JRadioButton("System").apply {
+                    pythonEnvTypeGroup.add(this)
+                    addActionListener { updatePythonEnvironment(PythonEnvironmentType.SYSTEM) }
+                }
+                
+                venvRadio = JRadioButton("Virtual Env").apply {
+                    pythonEnvTypeGroup.add(this)
+                    addActionListener { updatePythonEnvironment(PythonEnvironmentType.VENV) }
+                }
+                
+                condaRadio = JRadioButton("Conda").apply {
+                    pythonEnvTypeGroup.add(this)
+                    addActionListener { updatePythonEnvironment(PythonEnvironmentType.CONDA) }
+                }
+                
+                pipenvRadio = JRadioButton("Pipenv").apply {
+                    pythonEnvTypeGroup.add(this)
+                    addActionListener { updatePythonEnvironment(PythonEnvironmentType.PIPENV) }
+                }
+                
+                add(systemRadio)
+                add(Box.createHorizontalStrut(10))
+                add(venvRadio)
+                add(Box.createHorizontalStrut(10))
+                add(condaRadio)
+                add(Box.createHorizontalStrut(10))
+                add(pipenvRadio)
+                add(Box.createHorizontalGlue())
+            }
+            
+            controlPanel.add(pythonEnvTypePanel)
+            controlPanel.add(Box.createVerticalStrut(5))
+            
+            // 使用PIPConfigService的detectPythonEnvironment方法初始化默认选项
+            val pipConfigService = configService as? PIPConfigService
+            if (pipConfigService != null) {
+                // 检测当前环境并获取类型
+                val detectedType = pipConfigService.detectPythonEnvironment()
+                
+                // 根据检测到的环境类型设置选中状态
+                when (detectedType) {
+                    PythonEnvironmentType.SYSTEM -> systemRadio.isSelected = true
+                    PythonEnvironmentType.VENV -> venvRadio.isSelected = true
+                    PythonEnvironmentType.CONDA -> condaRadio.isSelected = true
+                    PythonEnvironmentType.PIPENV -> pipenvRadio.isSelected = true
+                }
+            } else {
+                systemRadio.isSelected = true // 默认选中
+            }
         }
 
         lateinit var refreshButton: JButton
@@ -390,13 +458,19 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
             addActionListener { performCleanup(configService) }
         }
 
-        val pathField = JTextField(currentRepoPath, 40).apply {
+        pathField = JTextField(currentRepoPath, 40).apply {
             validForDependencyType({
                 toolTipText = "Maven local repository path (writable directory)"
             } , arrayOf(DependencyType.MAVEN))
             validForDependencyType({
                 toolTipText = "Gradle local repository path (writable directory)"
             } , arrayOf(DependencyType.GRADLE))
+            validForDependencyType({
+                toolTipText = "PIP packages directory (writable directory)"
+            } , arrayOf(DependencyType.PIP))
+            validForDependencyType({
+                toolTipText = "NPM packages directory (writable directory)"
+            } , arrayOf(DependencyType.NPM))
             border = BorderFactory.createCompoundBorder(
                 JBUI.Borders.customLine(JBColor.border(), 1),
                 JBUI.Borders.empty(2)
@@ -421,18 +495,38 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
                     val newPath = if (pathField.text.isBlank()) {
                         // 当输入框为空时，获取系统默认路径
                         val defaultPath = configService.getLocalRepository(true)
-                        configService.updateLocalRepository(defaultPath)
-                        defaultPath
+                        
+                        // 处理PIP配置服务特殊情况
+                        if (currentDependencyType == DependencyType.PIP) {
+                            val pipConfigService = configService as? PIPConfigService
+                            if (defaultPath.isNotEmpty() && File(defaultPath).exists()) {
+                                pipConfigService?.updateLocalRepository(defaultPath)
+                                defaultPath
+                            } else {
+                                // 如果路径不存在，清空路径
+                                ""
+                            }
+                        } else {
+                            // 其他依赖类型正常处理
+                            configService.updateLocalRepository(defaultPath)
+                            defaultPath
+                        }
                     } else {
                         pathField.text
                     }
+                    
                     // 更新当前路径和输入框显示
                     currentRepoPath = newPath
                     pathField.text = newPath
-                    configService.updateLocalRepository(newPath)
+                    
+                    // 仅在路径非空时更新
+                    if (newPath.isNotEmpty()) {
+                        configService.updateLocalRepository(newPath)
+                    }
+                    
                     pathStatusLabel.text = ""
                     isEnabled = false
-                    previewButton.isEnabled = true
+                    previewButton.isEnabled = newPath.isNotEmpty() // 仅在路径非空时启用预览按钮
                 } catch (e: Exception) {
                     pathStatusLabel.text = "Invalid path: ${e.message}"
                     previewButton.isEnabled = false
@@ -440,6 +534,8 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
                 }
             }
         }
+        this.refreshButton = refreshButton
+
         val repoPanel = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.X_AXIS)
             alignmentX = Component.LEFT_ALIGNMENT
@@ -623,7 +719,7 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
     private fun openExplorerForPackage(item: CleanupPreview) {
         // 根据包名获取路径并打开资源管理器
         val path = item.path // 需要实现此方法以获取路径
-        val file = java.io.File(path)
+        val file = File(path)
         if (file.exists() && file.isDirectory) {
             // 使用系统命令打开资源管理器
             val command = when {
@@ -775,6 +871,72 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
             
             // 添加内部面板
             add(innerPanel)
+        }
+    }
+
+    // 添加处理Python环境类型变化的方法
+    private fun updatePythonEnvironment(envType: PythonEnvironmentType) {
+        if (currentDependencyType != DependencyType.PIP) return
+        
+        val pipConfigService = configService as? PIPConfigService ?: return
+        
+        // 将环境类型设置到PIPConfigService中
+        pipConfigService.setEnvironmentType(envType)
+        
+        // 获取更新后的路径
+        val newPath = pipConfigService.getLocalRepository(true)
+        
+        // 更新UI显示，无论路径是否有效
+        currentRepoPath = newPath
+        pathField.text = newPath
+        
+        // 检查是否需要用户选择Conda目录
+        if (envType == PythonEnvironmentType.CONDA && pipConfigService.isCondaSelectionNeeded() && 
+            (newPath.isEmpty() || !File(newPath).exists())) {
+            // 如果是Conda但需要用户选择，提示用户选择
+            promptForCondaPath()
+        } else if (newPath.isEmpty() || !File(newPath).exists()) {
+            // 如果路径无效，清空文本框
+            pathField.text = ""
+            currentRepoPath = ""
+        }
+        
+        // 更新按钮状态
+        refreshButton?.isEnabled = false
+    }
+    
+    // 提示用户选择Conda安装路径
+    private fun promptForCondaPath() {
+        // 显示提示对话框
+        Messages.showInfoMessage(
+            project,
+            "Could not detect Conda installation directory automatically. Please select your Conda installation directory.",
+            "Select Conda Directory"
+        )
+        
+        // 显示文件选择对话框
+        val fileChooser = JFileChooser().apply {
+            fileSelectionMode = JFileChooser.DIRECTORIES_ONLY
+            dialogTitle = "Select Conda Installation Directory"
+        }
+        
+        if (fileChooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
+            val selectedDir = fileChooser.selectedFile
+            val pipConfigService = configService as? PIPConfigService ?: return
+            
+            // 让服务处理选择的目录
+            val sitePkgsPath = pipConfigService.processSelectedCondaDirectory(selectedDir)
+            
+            if (sitePkgsPath != null) {
+                currentRepoPath = sitePkgsPath
+                pathField.text = sitePkgsPath
+            } else {
+                Messages.showErrorDialog(
+                    project,
+                    "Could not find a valid site-packages directory in the selected installation. Please check your selection.",
+                    "Invalid Directory"
+                )
+            }
         }
     }
 }

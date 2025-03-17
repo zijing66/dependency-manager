@@ -17,6 +17,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
     private var customRepoPath: String? = null
     private var environmentType: PythonEnvironmentType = PythonEnvironmentType.SYSTEM
     private var environmentPath: String? = null
+    private var condaInstallPath: String? = null
 
     // Python环境中常见的需要排除的目录
     private val commonPythonExclusions = listOf(
@@ -47,7 +48,56 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
     private val tarArchiveRegex = Regex("\\.tar\\.gz$|\\.tar\\.bz2$|\\.tar\\.xz$|\\.zip$")
     private val pythonPackageNormalizeRegex = Regex("[_.-]+")
     private val condaNameRegex = Regex("name:\\s*([^\\s]+)")
-    private val condaEnvDirsRegex = Regex("\"envs_dirs\"\\s*:\\s*\\[([^\\]]+)\\]")
+    private val condaEnvDirsRegex = Regex("\"envs_dirs\"\\s*:\\s*\\[([^]]+)]")
+
+    /**
+     * 设置Python环境类型并清除自定义路径
+     * 当UI中选择不同的环境类型时调用此方法
+     * @param type 环境类型
+     */
+    fun setEnvironmentType(type: PythonEnvironmentType) {
+        // 如果环境类型没有变化，不需要刷新
+        if (environmentType == type && environmentPath != null) {
+            return
+        }
+        
+        environmentType = type
+        // 清除环境路径和自定义路径，强制重新检测
+        environmentPath = null
+        customRepoPath = null
+        
+        // 根据环境类型选择性地刷新对应环境数据
+        when (type) {
+            PythonEnvironmentType.VENV -> {
+                environmentPath = findVenvPath()?.let { findSitePackagesInVenv(it) }
+            }
+            PythonEnvironmentType.CONDA -> {
+                // 如果已经有condaInstallPath但环境路径为空，尝试重新查找
+                if (condaInstallPath != null) {
+                    val sitePkgsPath = findSitePackagesInConda(condaInstallPath!!)
+                    if (sitePkgsPath != null) {
+                        environmentPath = sitePkgsPath
+                    }
+                } else {
+                    // 尝试检测conda安装
+                    detectCondaInstallation()
+                }
+            }
+            PythonEnvironmentType.PIPENV -> {
+                val projectPath = project.basePath
+                if (projectPath != null) {
+                    val pipenvPath = getPipenvVirtualEnvPath(projectPath)
+                    if (pipenvPath != null) {
+                        environmentPath = findSitePackagesInVenv(pipenvPath)
+                    }
+                }
+            }
+            PythonEnvironmentType.SYSTEM -> {
+                // 查找系统Python的site-packages
+                environmentPath = findSystemPythonSitePackages()
+            }
+        }
+    }
 
     /**
      * 判断Python相关的目录是否应该被排除
@@ -149,46 +199,90 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
         return false
     }
 
-    private fun detectPythonEnvironment() {
-        val projectPath = project.basePath ?: return
+
+    /**
+     * 检测conda安装位置
+     */
+    private fun detectCondaInstallation() {
+        val userHome = System.getProperty("user.home")
+        val osName = System.getProperty("os.name").lowercase(Locale.getDefault())
         
-        // 检测项目中的虚拟环境
-        when {
-            // 检查venv目录
-            File("$projectPath/venv").exists() || 
-            File("$projectPath/.venv").exists() -> {
-                environmentType = PythonEnvironmentType.VENV
-                environmentPath = if (File("$projectPath/venv").exists()) "$projectPath/venv" else "$projectPath/.venv"
-            }
-            // 检查Pipenv
-            File("$projectPath/Pipfile").exists() -> {
-                environmentType = PythonEnvironmentType.PIPENV
-                // 尝试获取Pipenv的虚拟环境路径
-                val pipenvVenvPath = getPipenvVirtualEnvPath(projectPath)
-                if (pipenvVenvPath != null) {
-                    environmentPath = pipenvVenvPath
-                }
-            }
-            // 检查Conda环境
-            File("$projectPath/environment.yml").exists() || 
-            File("$projectPath/conda-env.yml").exists() -> {
-                environmentType = PythonEnvironmentType.CONDA
-                // 尝试从conda配置文件中获取环境名称
-                val condaEnvName = getCondaEnvironmentName(projectPath)
-                if (condaEnvName != null) {
-                    environmentPath = getCondaEnvironmentPath(condaEnvName)
-                }
-            }
-            // 检查系统Python
-            else -> {
-                environmentType = PythonEnvironmentType.SYSTEM
-                // 尝试查找系统Python路径
-                val sitePackagesPath = findSystemPythonSitePackages()
-                if (sitePackagesPath != null) {
-                    environmentPath = File(sitePackagesPath).parentFile?.parentFile?.absolutePath
+        // Conda/Miniconda可能的安装位置
+        val possibleCondaPaths = when {
+            osName.contains("win") -> listOf(
+                "C:/ProgramData/Anaconda3",
+                "C:/ProgramData/Miniconda3",
+                "$userHome/Anaconda3",
+                "$userHome/Miniconda3"
+            )
+            osName.contains("mac") -> listOf(
+                "/opt/anaconda3",
+                "/opt/miniconda3",
+                "$userHome/anaconda3",
+                "$userHome/miniconda3"
+            )
+            else -> listOf( // Linux/Unix
+                "/opt/anaconda3",
+                "/opt/miniconda3",
+                "$userHome/anaconda3",
+                "$userHome/miniconda3"
+            )
+        }
+        
+        // 尝试找到Conda安装位置
+        for (condaPath in possibleCondaPaths) {
+            if (File(condaPath).exists() && isValidCondaDir(condaPath)) {
+                condaInstallPath = condaPath
+                
+                // 检查site-packages目录
+                val sitePkgsPath = findSitePackagesInConda(condaPath)
+                if (sitePkgsPath != null) {
+                    environmentPath = sitePkgsPath
+                    break
                 }
             }
         }
+    }
+
+    /**
+     * 检查是否是有效的Conda目录
+     */
+    private fun isValidCondaDir(condaPath: String): Boolean {
+        return File(condaPath).isDirectory && (
+            File("$condaPath/bin/conda").exists() ||
+            File("$condaPath/Scripts/conda.exe").exists() ||
+            File("$condaPath/condabin/conda").exists() ||
+            File("$condaPath/condabin/conda.exe").exists() ||
+            File("$condaPath/envs").exists()
+        )
+    }
+
+    /**
+     * 在Conda目录中查找site-packages
+     */
+    private fun findSitePackagesInConda(condaPath: String): String? {
+        // 检查site-packages目录的常见位置
+        val sitePkgsPathWin = "$condaPath/Lib/site-packages"
+        if (File(sitePkgsPathWin).exists()) {
+            return sitePkgsPathWin
+        }
+        
+        // 对于Unix系统，尝试找到python3.*目录
+        val libDir = File("$condaPath/lib")
+        if (libDir.exists() && libDir.isDirectory) {
+            val pythonDirs = libDir.listFiles { file -> 
+                file.isDirectory && file.name.startsWith("python3")
+            }
+            
+            if (pythonDirs?.isNotEmpty() == true) {
+                val sitePkgs = "${pythonDirs[0].absolutePath}/site-packages"
+                if (File(sitePkgs).exists()) {
+                    return sitePkgs
+                }
+            }
+        }
+        
+        return null
     }
 
     private fun getPipenvVirtualEnvPath(projectPath: String): String? {
@@ -241,52 +335,176 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
     }
 
     private fun getCondaEnvironmentPath(envName: String): String? {
-        try {
-            val process = ProcessBuilder("conda", "info", "--json")
-                .redirectErrorStream(true)
-                .start()
-            
-            val output = process.inputStream.bufferedReader().readText()
-            val exitCode = process.waitFor()
-            
-            if (exitCode == 0 && output.isNotEmpty()) {
-                // 使用简单正则表达式解析JSON输出
-                val envDirsMatch = condaEnvDirsRegex.find(output)
-                val envDirsStr = envDirsMatch?.groupValues?.get(1) ?: return null
+        // 查找conda命令的位置
+        val condaCmd = findCondaCommand()
+        
+        if (condaCmd != null) {
+            try {
+                val process = ProcessBuilder(condaCmd, "info", "--json")
+                    .redirectErrorStream(true)
+                    .start()
                 
-                // 解析环境目录列表
-                val envDirs = envDirsStr.split(",")
-                    .map { it.trim().trim('"') }
-                    .filter { it.isNotEmpty() }
+                val output = process.inputStream.bufferedReader().readText()
+                val exitCode = process.waitFor()
                 
-                // 在每个环境目录中查找指定的环境
-                for (envDir in envDirs) {
-                    val fullEnvPath = File("$envDir/$envName")
-                    if (fullEnvPath.exists() && fullEnvPath.isDirectory) {
-                        return fullEnvPath.absolutePath
+                if (exitCode == 0 && output.isNotEmpty()) {
+                    // 使用简单正则表达式解析JSON输出
+                    val envDirsMatch = condaEnvDirsRegex.find(output)
+                    val envDirsStr = envDirsMatch?.groupValues?.get(1) ?: return null
+                    
+                    // 解析环境目录列表
+                    val envDirs = envDirsStr.split(",")
+                        .map { it.trim().trim('"') }
+                        .filter { it.isNotEmpty() }
+                    
+                    // 在每个环境目录中查找指定的环境
+                    for (envDir in envDirs) {
+                        val fullEnvPath = File("$envDir/$envName")
+                        if (fullEnvPath.exists() && fullEnvPath.isDirectory) {
+                            return fullEnvPath.absolutePath
+                        }
                     }
                 }
+            } catch (e: IOException) {
+                Messages.showErrorDialog(
+                    project,
+                    "Error: Failed to execute Conda command. Error: ${e.message}",
+                    "Command Error"
+                )
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
-        } catch (e: IOException) {
+        } else {
             Messages.showErrorDialog(
                 project,
-                "Error: Conda command not found. Please ensure Conda is installed and added to your PATH.",
+                "Error: Conda command not found. Please ensure Conda is installed and set the correct Conda installation directory.",
                 "Command Error"
             )
-        } catch (e: Exception) {
-            e.printStackTrace()
         }
         
         // 如果无法通过conda命令获取，使用默认路径
         val userHome = System.getProperty("user.home")
-        val defaultCondaPath = when {
-            System.getProperty("os.name").lowercase(Locale.getDefault()).contains("win") -> 
-                "$userHome/anaconda3/envs/$envName"
-            else -> 
-                "$userHome/anaconda3/envs/$envName"
+        val defaultCondaPaths = listOf(
+            "$userHome/anaconda3/envs/$envName",
+            "$userHome/miniconda3/envs/$envName",
+            "C:/ProgramData/Anaconda3/envs/$envName",
+            "C:/ProgramData/Miniconda3/envs/$envName",
+            "/opt/anaconda3/envs/$envName",
+            "/opt/miniconda3/envs/$envName"
+        )
+        
+        for (path in defaultCondaPaths) {
+            if (File(path).exists()) {
+                return path
+            }
         }
         
-        return if (File(defaultCondaPath).exists()) defaultCondaPath else null
+        return null
+    }
+
+    /**
+     * 根据当前环境设置查找conda命令的位置
+     * @return conda命令的完整路径，如果找不到则返回null
+     */
+    private fun findCondaCommand(): String? {
+        // 首先检查condaInstallPath是否已经设置
+        if (condaInstallPath != null) {
+            val osName = System.getProperty("os.name").lowercase(Locale.getDefault())
+            val condaExecutable = if (osName.contains("win")) {
+                // 检查常见的conda可执行文件位置
+                listOf(
+                    "$condaInstallPath/Scripts/conda.exe", 
+                    "$condaInstallPath/condabin/conda.bat", 
+                    "$condaInstallPath/condabin/conda.exe"
+                ).find { File(it).exists() }
+            } else {
+                // Unix系统中的conda位置
+                listOf(
+                    "$condaInstallPath/bin/conda",
+                    "$condaInstallPath/condabin/conda"
+                ).find { File(it).exists() }
+            }
+            
+            if (condaExecutable != null) {
+                return condaExecutable
+            }
+        }
+        
+        // 如果condaInstallPath未设置或没找到conda，尝试检测系统路径
+        val osName = System.getProperty("os.name").lowercase(Locale.getDefault())
+        val userHome = System.getProperty("user.home")
+        
+        // 可能的conda安装位置
+        val possibleCondaPaths = if (osName.contains("win")) {
+            listOf(
+                "C:/ProgramData/Anaconda3",
+                "C:/ProgramData/Miniconda3",
+                "$userHome/Anaconda3",
+                "$userHome/Miniconda3"
+            )
+        } else if (osName.contains("mac")) {
+            listOf(
+                "/opt/anaconda3",
+                "/opt/miniconda3",
+                "$userHome/anaconda3",
+                "$userHome/miniconda3"
+            )
+        } else {
+            listOf(
+                "/opt/anaconda3",
+                "/opt/miniconda3",
+                "$userHome/anaconda3",
+                "$userHome/miniconda3"
+            )
+        }
+        
+        // 检查每个可能的路径下的conda可执行文件
+        for (basePath in possibleCondaPaths) {
+            val condaExecutable = if (osName.contains("win")) {
+                listOf(
+                    "$basePath/Scripts/conda.exe", 
+                    "$basePath/condabin/conda.bat", 
+                    "$basePath/condabin/conda.exe"
+                ).find { File(it).exists() }
+            } else {
+                listOf(
+                    "$basePath/bin/conda",
+                    "$basePath/condabin/conda"
+                ).find { File(it).exists() }
+            }
+            
+            if (condaExecutable != null) {
+                // 记录找到的conda安装路径
+                condaInstallPath = basePath
+                return condaExecutable
+            }
+        }
+        
+        // 如果还是找不到，尝试使用PATH中的conda命令
+        try {
+            val process = if (osName.contains("win")) {
+                ProcessBuilder("where", "conda").start()
+            } else {
+                ProcessBuilder("which", "conda").start()
+            }
+            
+            val output = process.inputStream.bufferedReader().readText().trim()
+            val exitCode = process.waitFor()
+            
+            if (exitCode == 0 && output.isNotEmpty()) {
+                val condaPath = output.lines().firstOrNull()
+                if (condaPath != null && File(condaPath).exists()) {
+                    // 设置conda安装目录
+                    val condaFile = File(condaPath)
+                    condaInstallPath = condaFile.parentFile?.parentFile?.absolutePath
+                    return condaPath
+                }
+            }
+        } catch (e: Exception) {
+            // 忽略异常，表示找不到conda命令
+        }
+        
+        return null
     }
 
     private fun getPipCacheDirectory(): String {
@@ -327,117 +545,67 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
     }
 
     override fun getLocalRepository(refresh: Boolean): String {
+        // 如果有自定义路径且不需要刷新，直接返回
         customRepoPath?.takeIf { !refresh && isValidRepoPath(it) }?.let { return it }
 
-        // 首先检查项目目录中的site-packages目录
-        val projectPath = project.basePath
-        if (projectPath != null) {
-            detectPythonEnvironment()
-            // 根据环境类型查找包目录
-            val sitePackagesPath = when (environmentType) {
+        // 如果是刷新或者第一次调用，且不是由setEnvironmentType调用时
+        if ((refresh || environmentPath == null) && 
+            (refresh || Thread.currentThread().stackTrace.none { it.methodName == "setEnvironmentType" })) {
+            // 如果需要刷新，先检测环境
+            if (refresh) {
+                detectPythonEnvironment()
+            }
+            
+            // 根据环境类型选择性地刷新对应环境数据
+            when (environmentType) {
                 PythonEnvironmentType.VENV -> {
-                    val venvPath = environmentPath ?: 
-                                   if (File("$projectPath/venv").exists()) "$projectPath/venv" 
-                                   else "$projectPath/.venv"
-                    
-                    // 检查标准路径结构
-                    val libDir = if (File("$venvPath/lib").exists()) "lib" else "Lib"
-                    val pythonDirs = File("$venvPath/$libDir").listFiles { file -> 
-                        file.isDirectory && file.name.startsWith("python") 
-                    }
-                    
-                    if (pythonDirs?.isNotEmpty() == true) {
-                        "${pythonDirs[0].absolutePath}/site-packages"
-                    } else {
-                        // 如果没有找到标准结构，尝试更简单的路径
-                        if (File("$venvPath/Lib/site-packages").exists()) {
-                            "$venvPath/Lib/site-packages"
-                        } else if (File("$venvPath/lib/site-packages").exists()) {
-                            "$venvPath/lib/site-packages"
-                        } else {
-                            null
-                        }
-                    }
+                    environmentPath = findVenvPath()?.let { findSitePackagesInVenv(it) }
                 }
                 PythonEnvironmentType.CONDA -> {
-                    val condaPath = environmentPath
-                    if (condaPath != null) {
-                        // 检查标准路径结构
-                        val libDir = if (File("$condaPath/lib").exists()) "lib" else "Lib"
-                        val pythonDirs = File("$condaPath/$libDir").listFiles { file -> 
-                            file.isDirectory && file.name.startsWith("python") 
-                        }
-                        
-                        if (pythonDirs?.isNotEmpty() == true) {
-                            "${pythonDirs[0].absolutePath}/site-packages"
-                        } else {
-                            // 如果没有找到标准结构，尝试更简单的路径
-                            val possiblePaths = listOf(
-                                "$condaPath/Lib/site-packages",
-                                "$condaPath/lib/site-packages",
-                                "$condaPath/lib/python3.8/site-packages",  // 常见的Python版本路径
-                                "$condaPath/lib/python3.9/site-packages", 
-                                "$condaPath/lib/python3.10/site-packages",
-                                "$condaPath/lib/python3.11/site-packages"
-                            )
-                            
-                            possiblePaths.find { File(it).exists() && File(it).isDirectory } ?: null
+                    // 如果已经有condaInstallPath但没有环境路径，尝试重新查找
+                    if (condaInstallPath != null) {
+                        val sitePkgsPath = findSitePackagesInConda(condaInstallPath!!)
+                        if (sitePkgsPath != null) {
+                            environmentPath = sitePkgsPath
                         }
                     } else {
-                        null
+                        // 尝试检测conda安装
+                        detectCondaInstallation()
                     }
                 }
                 PythonEnvironmentType.PIPENV -> {
-                    val pipenvPath = environmentPath
-                    if (pipenvPath != null) {
-                        // 检查标准路径结构
-                        val libDir = if (File("$pipenvPath/lib").exists()) "lib" else "Lib"
-                        val pythonDirs = File("$pipenvPath/$libDir").listFiles { file -> 
-                            file.isDirectory && file.name.startsWith("python") 
+                    val projectPath = project.basePath
+                    if (projectPath != null) {
+                        val pipenvPath = getPipenvVirtualEnvPath(projectPath)
+                        if (pipenvPath != null) {
+                            environmentPath = findSitePackagesInVenv(pipenvPath)
                         }
-                        
-                        if (pythonDirs?.isNotEmpty() == true) {
-                            "${pythonDirs[0].absolutePath}/site-packages"
-                        } else {
-                            // 如果没有找到标准结构，尝试更简单的路径
-                            val possiblePaths = listOf(
-                                "$pipenvPath/Lib/site-packages",
-                                "$pipenvPath/lib/site-packages",
-                                "$pipenvPath/lib/python3.8/site-packages",
-                                "$pipenvPath/lib/python3.9/site-packages",
-                                "$pipenvPath/lib/python3.10/site-packages",
-                                "$pipenvPath/lib/python3.11/site-packages"
-                            )
-                            
-                            possiblePaths.find { File(it).exists() && File(it).isDirectory } ?: null
-                        }
-                    } else {
-                        null
                     }
                 }
-                else -> null
-            }
-            
-            if (sitePackagesPath != null && File(sitePackagesPath).exists() && isValidRepoPath(sitePackagesPath)) {
-                return sitePackagesPath
+                PythonEnvironmentType.SYSTEM -> {
+                    // 查找系统Python的site-packages
+                    environmentPath = findSystemPythonSitePackages()
+                }
             }
         }
 
-        // 从环境变量获取pip缓存目录
-        System.getenv("PIP_CACHE_DIR")?.takeIf { isValidRepoPath(it) }?.let { return it }
+        // 如果找到了site-packages路径，返回它
+        if (environmentPath != null && File(environmentPath!!).exists() && isValidRepoPath(environmentPath!!)) {
+            return environmentPath!!
+        }
 
-        // 根据环境类型获取缓存目录
+        // 找不到site-packages目录，返回pip缓存目录
         val cacheDir = when (environmentType) {
             PythonEnvironmentType.VENV -> {
-                val venvPath = environmentPath
+                val venvPath = findVenvPath()
                 if (venvPath != null) getVenvCacheDirectory(venvPath) else getPipCacheDirectory()
             }
             PythonEnvironmentType.CONDA -> {
-                val condaPath = environmentPath
-                if (condaPath != null) getCondaCacheDirectory(condaPath) else getPipCacheDirectory()
+                if (condaInstallPath != null) getCondaCacheDirectory(condaInstallPath!!) else getPipCacheDirectory()
             }
             PythonEnvironmentType.PIPENV -> {
-                val pipenvPath = environmentPath
+                val projectPath = project.basePath
+                val pipenvPath = if (projectPath != null) getPipenvVirtualEnvPath(projectPath) else null
                 if (pipenvPath != null) getPipenvCacheDirectory(pipenvPath) else getPipCacheDirectory()
             }
             else -> {
@@ -447,6 +615,28 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
         }
         
         return cacheDir.replace("\\", "/")
+    }
+    
+    /**
+     * 查找virtualenv路径下特定的site-packages目录
+     */
+    private fun findVenvPath(): String? {
+        val projectPath = project.basePath ?: return null
+        
+        // 检查项目中常见的虚拟环境目录
+        val venvDirs = listOf(
+            "$projectPath/venv",
+            "$projectPath/.venv",
+            "$projectPath/env"
+        )
+        
+        for (venvDir in venvDirs) {
+            if (File(venvDir).exists()) {
+                return venvDir
+            }
+        }
+        
+        return null
     }
 
     private fun extractPipConfigCacheDir(): String? {
@@ -541,8 +731,8 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
         val relativePath = packageDir?.relativeTo(rootDir)?.path?.replace('\\', '/')
         
         // 根据不同文件类型进行处理
-        var packageName: String = "unknown"
-        var version: String = "unknown"
+        var packageName = "unknown"
+        var version = "unknown"
         
         when {
             file.name.endsWith(".whl") -> {
@@ -1089,5 +1279,134 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
      */
     override fun getPackageNameSeparator(): String {
         return "@"
+    }
+
+    /**
+     * 检查是否需要用户手动选择Conda安装目录
+     * @return 如果需要用户选择则返回true
+     */
+    fun isCondaSelectionNeeded(): Boolean {
+        return environmentType == PythonEnvironmentType.CONDA && 
+               (condaInstallPath == null || environmentPath == null)
+    }
+    
+    /**
+     * 处理用户选择的Conda目录
+     * @param selectedDir 用户选择的目录
+     * @return 找到的site-packages路径，如果无效则返回null
+     */
+    fun processSelectedCondaDirectory(selectedDir: File): String? {
+        // 检查是否是有效的Conda目录
+        if (!isValidCondaDir(selectedDir.absolutePath)) {
+            return null
+        }
+        
+        // 设置conda安装路径
+        condaInstallPath = selectedDir.absolutePath
+        
+        // 查找site-packages目录
+        val sitePkgsPath = findSitePackagesInConda(condaInstallPath!!)
+        if (sitePkgsPath != null) {
+            environmentPath = sitePkgsPath
+            return sitePkgsPath
+        }
+        
+        return null
+    }
+
+    /**
+     * 检测并初始化Python环境
+     * 该方法会检测项目中常见的Python环境标志并设置相应的环境类型
+     * @return 检测到的环境类型
+     */
+    fun detectPythonEnvironment(): PythonEnvironmentType {
+        // 如果已经设置了环境类型，则不再重新检测
+        if (environmentPath != null && environmentType != PythonEnvironmentType.SYSTEM) {
+            return environmentType
+        }
+        
+        val projectPath = project.basePath ?: return PythonEnvironmentType.SYSTEM
+        
+        // 检测项目中的虚拟环境
+        when {
+            // 检查venv目录
+            File("$projectPath/venv").exists() || 
+            File("$projectPath/.venv").exists() -> {
+                environmentType = PythonEnvironmentType.VENV
+                val venvDir = if (File("$projectPath/venv").exists()) "$projectPath/venv" else "$projectPath/.venv"
+                environmentPath = findSitePackagesInVenv(venvDir)
+            }
+            // 检查Pipenv
+            File("$projectPath/Pipfile").exists() -> {
+                environmentType = PythonEnvironmentType.PIPENV
+                // 尝试获取Pipenv的虚拟环境路径
+                val pipenvVenvPath = getPipenvVirtualEnvPath(projectPath)
+                if (pipenvVenvPath != null) {
+                    environmentPath = findSitePackagesInVenv(pipenvVenvPath)
+                }
+            }
+            // 检查Conda环境
+            File("$projectPath/environment.yml").exists() || 
+            File("$projectPath/conda-env.yml").exists() -> {
+                environmentType = PythonEnvironmentType.CONDA
+                // 尝试从conda配置文件中获取环境名称
+                val condaEnvName = getCondaEnvironmentName(projectPath)
+                if (condaEnvName != null) {
+                    val condaEnvPath = getCondaEnvironmentPath(condaEnvName)
+                    if (condaEnvPath != null) {
+                        environmentPath = findSitePackagesInVenv(condaEnvPath)
+                    }
+                } else {
+                    // 如果找不到环境名称，尝试检测常见的conda安装路径
+                    detectCondaInstallation()
+                }
+            }
+            // 检查系统Python
+            else -> {
+                environmentType = PythonEnvironmentType.SYSTEM
+                // 尝试查找系统Python路径
+                environmentPath = findSystemPythonSitePackages()
+            }
+        }
+        
+        return environmentType
+    }
+
+    /**
+     * 统一查找Python环境中的site-packages目录
+     * @param envPath Python环境路径（venv、conda或pipenv）
+     * @return site-packages目录路径，如果找不到则返回null
+     */
+    private fun findSitePackagesInVenv(envPath: String): String? {
+        // 检查标准路径结构
+        val libDir = if (File("$envPath/lib").exists()) "lib" else "Lib"
+        
+        // 如果lib目录存在，查找python*目录
+        val libDirFile = File("$envPath/$libDir")
+        if (libDirFile.exists() && libDirFile.isDirectory) {
+            val pythonDirs = libDirFile.listFiles { file -> 
+                file.isDirectory && file.name.startsWith("python") 
+            }
+            
+            if (pythonDirs?.isNotEmpty() == true) {
+                val sitePkgs = "${pythonDirs[0].absolutePath}/site-packages"
+                if (File(sitePkgs).exists()) {
+                    return sitePkgs
+                }
+            }
+        }
+        
+        // 尝试直接查找常见的site-packages路径
+        val possiblePaths = listOf(
+            "$envPath/Lib/site-packages",
+            "$envPath/lib/site-packages",
+            "$envPath/lib/python3.8/site-packages",
+            "$envPath/lib/python3.9/site-packages",
+            "$envPath/lib/python3.10/site-packages",
+            "$envPath/lib/python3.11/site-packages",
+            "$envPath/lib/python3.12/site-packages"
+        )
+        
+        return possiblePaths.find { File(it).exists() && File(it).isDirectory }
     }
 } 
