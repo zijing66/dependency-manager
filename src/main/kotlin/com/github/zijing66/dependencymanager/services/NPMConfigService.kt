@@ -180,17 +180,13 @@ class NPMConfigService(project: Project) : AbstractConfigService(project) {
         }
     }
 
-    init {
-        // 初始化时检测包管理器类型
-        packageManager = detectPackageManager()
-    }
-
     override fun getLocalRepository(refresh: Boolean): String {
         customRepoPath?.takeIf { !refresh && isValidRepoPath(it) }?.let { return it }
 
         // 首先检查node_modules目录
         val projectPath = project.basePath
         if (projectPath != null) {
+            packageManager = detectPackageManager()
             val nodeModulesPath = "$projectPath/node_modules"
             if (File(nodeModulesPath).exists() && isValidRepoPath(nodeModulesPath)) {
                 return nodeModulesPath

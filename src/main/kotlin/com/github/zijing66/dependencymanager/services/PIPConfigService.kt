@@ -6,9 +6,9 @@ import com.github.zijing66.dependencymanager.models.PkgData
 import com.github.zijing66.dependencymanager.models.PythonEnvironmentType
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.ui.Messages
 import java.io.File
-import java.nio.file.Files
-import java.nio.file.Paths
+import java.io.IOException
 import java.util.*
 
 @Service(Service.Level.PROJECT)
@@ -149,11 +149,6 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
         return false
     }
 
-    init {
-        // 初始化时检测Python环境类型
-        detectPythonEnvironment()
-    }
-
     private fun detectPythonEnvironment() {
         val projectPath = project.basePath ?: return
         
@@ -246,7 +241,6 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
     }
 
     private fun getCondaEnvironmentPath(envName: String): String? {
-        // 尝试运行conda info命令获取conda环境根目录
         try {
             val process = ProcessBuilder("conda", "info", "--json")
                 .redirectErrorStream(true)
@@ -273,8 +267,14 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                     }
                 }
             }
+        } catch (e: IOException) {
+            Messages.showErrorDialog(
+                project,
+                "Error: Conda command not found. Please ensure Conda is installed and added to your PATH.",
+                "Command Error"
+            )
         } catch (e: Exception) {
-            // 命令执行失败，使用默认路径
+            e.printStackTrace()
         }
         
         // 如果无法通过conda命令获取，使用默认路径
@@ -332,6 +332,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
         // 首先检查项目目录中的site-packages目录
         val projectPath = project.basePath
         if (projectPath != null) {
+            detectPythonEnvironment()
             // 根据环境类型查找包目录
             val sitePackagesPath = when (environmentType) {
                 PythonEnvironmentType.VENV -> {
