@@ -1,8 +1,8 @@
 # 依赖管理插件
 
 ![Build](https://github.com/zijing66/dependency-manager/workflows/Build/badge.svg)
-[![Version](https://img.shields.io/jetbrains/plugin/v/26753-dependency-manager.svg)](https://plugins.jetbrains.com/plugin/MARKETPLACE_ID)
-[![Downloads](https://img.shields.io/jetbrains/plugin/d/26753-dependency-manager.svg)](https://plugins.jetbrains.com/plugin/MARKETPLACE_ID)
+[![Version](https://img.shields.io/jetbrains/plugin/v/26753-dependency-manager.svg)](https://plugins.jetbrains.com/plugin/26753-dependency-manager)
+[![Downloads](https://img.shields.io/jetbrains/plugin/d/26753-dependency-manager.svg)](https://plugins.jetbrains.com/plugin/26753-dependency-manager)
 
 <!-- Plugin description -->
 依赖清理插件，主要功能：
