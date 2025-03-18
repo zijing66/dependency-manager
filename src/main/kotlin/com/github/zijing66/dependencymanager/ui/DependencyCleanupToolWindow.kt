@@ -118,7 +118,6 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
 
     private val initialized = AtomicBoolean(false)
 
-    private var currentPreview: CleanupSummary? = null
     private val headerCheckBox = JCheckBox()
     private lateinit var configService: IConfigService
     private lateinit var currentDependencyType: DependencyType
@@ -686,15 +685,26 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
         progressBar.isIndeterminate = true
         statusLabel.text = "Loading preview..."
 
-        SwingUtilities.invokeLater {
-            currentPreview = configService.previewCleanup(configOptions)
-            previewModel.setData(currentPreview?.previewItems ?: emptyList())
-            headerCheckBox.isSelected = false
-            updateStatus()
+        configService.previewCleanup(
+            configOptions,
+            onProgress = { current, total ->
+                SwingUtilities.invokeLater {  // 添加Swing线程调度
+                    progressBar.value = (current.toFloat() / total * 100).toInt()
+                    statusLabel.text = "Scanning files: $current / $total completed"
+                }
+            },
+            onComplete = { currentPreview ->
+                SwingUtilities.invokeLater {
+                    previewModel.setData(currentPreview.previewItems)
+                    headerCheckBox.isSelected = false
+                    val totalSize = formatFileSize(currentPreview.totalSize)
+                    statusLabel.text = "Found ${currentPreview.totalFiles} files (Total size: $totalSize)"  // 添加总大小标识
+                    progressBar.isVisible = false
+                    previewTable.parent.parent.isVisible = true
+                }
+            }
+        )
 
-            progressBar.isVisible = false
-            previewTable.parent.parent.isVisible = true
-        }
     }
 
     private fun performCleanup(configService: IConfigService) {
@@ -723,13 +733,6 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
                 }
             }
         )
-    }
-
-    private fun updateStatus() {
-        currentPreview?.let { preview ->
-            val totalSize = formatFileSize(preview.totalSize)
-            statusLabel.text = "Found ${preview.totalFiles} files (Total size: $totalSize)"  // 添加总大小标识
-        }
     }
 
     private fun formatFileSize(size: Long): String {

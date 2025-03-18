@@ -610,119 +610,109 @@ class NPMConfigService(project: Project) : AbstractConfigService(project) {
         return DependencyType.NPM
     }
 
-    /**
-     * 实现新的 scanRepository 方法，使用 ConfigOptions 对象
-     */
-    override fun scanRepository(
-        dir: File, onDirFound: (File, String, PkgData) -> Unit, configOptions: ConfigOptions
-    ) {
+    override fun eachScanEntry(configOptions: ConfigOptions, path: String, pkgData: PkgData, onDirFound: (File, String, PkgData) -> Unit) {
         val targetPackageName = configOptions.targetPackage.takeIf { it.isNotEmpty() }
         val separator = getPackageNameSeparator()
+        // 检查是否是invalid文件（损坏或未完成的下载）
+        val isInvalidPackage = pkgData.invalid
 
-        val pathPkgDataMap = fetchPkgMap(dir)
+        // 检查是否是snapshot版本（预发布版本）
+        // npm预发布版本通常带有后缀如: alpha, beta, rc, dev等
+        val isSnapshotVersion = pkgData.packageName.contains(snapshotVersionRegex)
 
-        pathPkgDataMap.forEach { (path, pkgData) ->
-            // 检查是否是invalid文件（损坏或未完成的下载）
-            val isInvalidPackage = pkgData.invalid
-            
-            // 检查是否是snapshot版本（预发布版本）
-            // npm预发布版本通常带有后缀如: alpha, beta, rc, dev等
-            val isSnapshotVersion = pkgData.packageName.contains(snapshotVersionRegex)
-            
-            // 检查是否匹配指定的包名
-            val isTargetPackage = when {
-                targetPackageName == null -> false // 如果没有指定包名，则不视为匹配
-                pkgData.packageName.startsWith("$targetPackageName$separator") -> true
-                // 前缀匹配包名（不含版本号部分）
-                pkgData.packageName.contains(separator) && 
+        // 检查是否匹配指定的包名
+        val isTargetPackage = when {
+            targetPackageName == null -> false // 如果没有指定包名，则不视为匹配
+            pkgData.packageName.startsWith("$targetPackageName$separator") -> true
+            // 前缀匹配包名（不含版本号部分）
+            pkgData.packageName.contains(separator) &&
                     pkgData.packageName.split(separator)[0].startsWith(targetPackageName) -> true
-                // 处理带有'/'的包名 - 作用域包的情况，比如@scope/package-name
-                pkgData.packageName.contains("/") && pkgData.packageName.contains(separator) && (
+            // 处理带有'/'的包名 - 作用域包的情况，比如@scope/package-name
+            pkgData.packageName.contains("/") && pkgData.packageName.contains(separator) && (
                     pkgData.packageName.split(separator)[0].startsWith(targetPackageName) || // 前缀匹配整个包名
-                    pkgData.packageName.split(separator)[0].split("/").last().startsWith(targetPackageName) // 前缀匹配无作用域部分
-                ) -> true
-                else -> false
-            }
-            
-            // 检查是否包含版本号
-            val hasVersion = pkgData.packageName.contains(separator) && 
-                            !pkgData.packageName.endsWith("${separator}unknown") && 
-                            !pkgData.packageName.endsWith(separator) &&
-                            pkgData.packageName.split(separator).size > 1
+                            pkgData.packageName.split(separator)[0].split("/").last().startsWith(targetPackageName) // 前缀匹配无作用域部分
+                    ) -> true
+            else -> false
+        }
 
-            // 特殊处理win32-x64等平台特定目录
-            val isNativeBinary = pkgData.packageDir.name.matches(nativeBinaryRegex)
-            
-            // 处理平台特定目录中的二进制文件
-            val hasBinaryFiles = if (isNativeBinary) {
-                val binaryFiles = pkgData.packageDir.listFiles { file -> 
-                    file.isFile && (file.name.endsWith(".exe") || file.name.endsWith(".dll") || 
-                                  file.name.endsWith(".so") || file.name.endsWith(".dylib") ||
-                                  file.extension.isEmpty() && file.canExecute()) 
-                }
-                binaryFiles?.isNotEmpty() ?: false
-            } else false
-            
-            // 如果是平台特定目录，并且有效，补充包名信息
-            val adjustedPkgData = if (isNativeBinary && (hasBinaryFiles || pkgData.packageDir.listFiles()?.isNotEmpty() == true) && configOptions.showPlatformSpecificBinaries) {
-                // 尝试从上级目录确定包名
-                val parentDirPath = pkgData.packageDir.parentFile?.path ?: ""
-                val packageRoot = File(parentDirPath)
-                val packageJsonFile = File(packageRoot, "package.json")
-                
-                if (packageJsonFile.exists()) {
-                    // 从package.json读取包名和版本
-                    val content = packageJsonFile.readText()
-                    val nameMatch = packageNameRegex.find(content)
-                    val versionMatch = packageVersionRegex.find(content)
-                    
-                    val actualPackageName = nameMatch?.groupValues?.get(1) ?: pkgData.packageName.split(separator)[0]
-                    val actualVersion = versionMatch?.groupValues?.get(1) ?: 
-                                      if (pkgData.packageName.contains(separator)) pkgData.packageName.split(separator)[1] else "unknown"
-                    
-                    // 创建新的PkgData并附加平台信息
-                    PkgData(
-                        relativePath = pkgData.relativePath,
-                        packageName = "$actualPackageName${separator}$actualVersion (${pkgData.packageDir.name})",
-                        packageDir = pkgData.packageDir,
-                        invalid = pkgData.invalid
-                    )
-                } else {
-                    // 如果找不到package.json，保留原始包名但标记为平台特定版本
-                    val parts = pkgData.packageName.split(separator)
-                    val name = parts[0]
-                    val version = if (parts.size > 1) parts[1] else "unknown"
-                    
-                    PkgData(
-                        relativePath = pkgData.relativePath,
-                        packageName = "$name${separator}$version (${pkgData.packageDir.name})",
-                        packageDir = pkgData.packageDir,
-                        invalid = pkgData.invalid
-                    )
-                }
-            } else pkgData
-            
-            // 筛选逻辑：包含符合条件的包（指定的目标包名、快照版本、平台特定或无效包）
-            val shouldInclude = when {
-                configOptions.targetPackage.isNotEmpty() && isTargetPackage -> true
-                configOptions.showPlatformSpecificBinaries && isNativeBinary -> true
-                configOptions.includeSnapshot && isSnapshotVersion -> true
-                configOptions.showInvalidPackages && isInvalidPackage -> true
-                else -> false
-            }
+        // 检查是否包含版本号
+        val hasVersion = pkgData.packageName.contains(separator) &&
+                !pkgData.packageName.endsWith("${separator}unknown") &&
+                !pkgData.packageName.endsWith(separator) &&
+                pkgData.packageName.split(separator).size > 1
 
-            // 设置匹配类型 - 调整展示优先级
-            val matchType = when {
-                isInvalidPackage -> "invalid"
-                isTargetPackage -> "matched"
-                isNativeBinary -> "native"
-                isSnapshotVersion -> "prerelease"
-                else -> "unknown" // 理论上不应该有unknown类型被包含
-            }
+        // 特殊处理win32-x64等平台特定目录
+        val isNativeBinary = pkgData.packageDir.name.matches(nativeBinaryRegex)
 
-            if (shouldInclude) {
-                onDirFound(adjustedPkgData.packageDir, matchType, adjustedPkgData)
+        // 处理平台特定目录中的二进制文件
+        val hasBinaryFiles = if (isNativeBinary) {
+            val binaryFiles = pkgData.packageDir.listFiles { file ->
+                file.isFile && (file.name.endsWith(".exe") || file.name.endsWith(".dll") ||
+                        file.name.endsWith(".so") || file.name.endsWith(".dylib") ||
+                        file.extension.isEmpty() && file.canExecute())
             }
+            binaryFiles?.isNotEmpty() ?: false
+        } else false
+
+        // 如果是平台特定目录，并且有效，补充包名信息
+        val adjustedPkgData = if (isNativeBinary && (hasBinaryFiles || pkgData.packageDir.listFiles()?.isNotEmpty() == true) && configOptions.showPlatformSpecificBinaries) {
+            // 尝试从上级目录确定包名
+            val parentDirPath = pkgData.packageDir.parentFile?.path ?: ""
+            val packageRoot = File(parentDirPath)
+            val packageJsonFile = File(packageRoot, "package.json")
+
+            if (packageJsonFile.exists()) {
+                // 从package.json读取包名和版本
+                val content = packageJsonFile.readText()
+                val nameMatch = packageNameRegex.find(content)
+                val versionMatch = packageVersionRegex.find(content)
+
+                val actualPackageName = nameMatch?.groupValues?.get(1) ?: pkgData.packageName.split(separator)[0]
+                val actualVersion = versionMatch?.groupValues?.get(1) ?:
+                if (pkgData.packageName.contains(separator)) pkgData.packageName.split(separator)[1] else "unknown"
+
+                // 创建新的PkgData并附加平台信息
+                PkgData(
+                    relativePath = pkgData.relativePath,
+                    packageName = "$actualPackageName${separator}$actualVersion (${pkgData.packageDir.name})",
+                    packageDir = pkgData.packageDir,
+                    invalid = pkgData.invalid
+                )
+            } else {
+                // 如果找不到package.json，保留原始包名但标记为平台特定版本
+                val parts = pkgData.packageName.split(separator)
+                val name = parts[0]
+                val version = if (parts.size > 1) parts[1] else "unknown"
+
+                PkgData(
+                    relativePath = pkgData.relativePath,
+                    packageName = "$name${separator}$version (${pkgData.packageDir.name})",
+                    packageDir = pkgData.packageDir,
+                    invalid = pkgData.invalid
+                )
+            }
+        } else pkgData
+
+        // 筛选逻辑：包含符合条件的包（指定的目标包名、快照版本、平台特定或无效包）
+        val shouldInclude = when {
+            configOptions.targetPackage.isNotEmpty() && isTargetPackage -> true
+            configOptions.showPlatformSpecificBinaries && isNativeBinary -> true
+            configOptions.includeSnapshot && isSnapshotVersion -> true
+            configOptions.showInvalidPackages && isInvalidPackage -> true
+            else -> false
+        }
+
+        // 设置匹配类型 - 调整展示优先级
+        val matchType = when {
+            isInvalidPackage -> "invalid"
+            isTargetPackage -> "matched"
+            isNativeBinary -> "native"
+            isSnapshotVersion -> "prerelease"
+            else -> "unknown" // 理论上不应该有unknown类型被包含
+        }
+
+        if (shouldInclude) {
+            onDirFound(adjustedPkgData.packageDir, matchType, adjustedPkgData)
         }
     }
 

@@ -102,58 +102,55 @@ class GradleConfigService(project: Project) : AbstractConfigService(project) {
         return DependencyType.GRADLE
     }
 
-    /**
-     * 实现新的 scanRepository 方法，使用 ConfigOptions 对象
-     */
-    override fun scanRepository(
-        dir: File, onDirFound: (File, String, PkgData) -> Unit, configOptions: ConfigOptions
+    override fun eachScanEntry(
+        configOptions: ConfigOptions,
+        path: String,
+        pkgData: PkgData,
+        onDirFound: (File, String, PkgData) -> Unit
     ) {
         val targetGroupArtifact = configOptions.targetPackage.takeIf { it.isNotEmpty() }?.split(":")
-        val pathPkgDataMap = fetchPkgMap(dir)
 
-        pathPkgDataMap.forEach { (path, pkgData) ->
-            // 检查是否是SNAPSHOT目录
-            val isSnapshotDir = pkgData.packageName.contains(snapshotDirRegex)
-            
-            // 检查是否是失效的包
-            val isInvalidPackage = pkgData.invalid
+        // 检查是否是SNAPSHOT目录
+        val isSnapshotDir = pkgData.packageName.contains(snapshotDirRegex)
 
-            // 检查是否匹配指定的group/artifact
-            val isTargetGroupArtifact = when (targetGroupArtifact?.size) {
-                2 -> {
-                    val (group, artifact) = targetGroupArtifact
-                    pkgData.packageName.startsWith("${group}:${artifact}")
-                }
+        // 检查是否是失效的包
+        val isInvalidPackage = pkgData.invalid
 
-                1 -> {
-                    val group = targetGroupArtifact[0]
-                    pkgData.packageName.startsWith(group)
-                }
-
-                else -> {
-                    false
-                }
-            }
-            
-            // 筛选逻辑
-            val shouldInclude = when {
-                configOptions.showInvalidPackages && isInvalidPackage -> true
-                configOptions.targetPackage.isNotEmpty() && isTargetGroupArtifact -> true
-                configOptions.includeSnapshot && isSnapshotDir -> true
-                else -> false
-            }
-            
-            // 设置匹配类型
-            val matchType = when {
-                isInvalidPackage -> "invalid"
-                isTargetGroupArtifact -> "matched"
-                isSnapshotDir -> "snapshot"
-                else -> "unknown"
+        // 检查是否匹配指定的group/artifact
+        val isTargetGroupArtifact = when (targetGroupArtifact?.size) {
+            2 -> {
+                val (group, artifact) = targetGroupArtifact
+                pkgData.packageName.startsWith("${group}:${artifact}")
             }
 
-            if (shouldInclude) {
-                onDirFound(pkgData.packageDir, matchType, pkgData)
+            1 -> {
+                val group = targetGroupArtifact[0]
+                pkgData.packageName.startsWith(group)
             }
+
+            else -> {
+                false
+            }
+        }
+
+        // 筛选逻辑
+        val shouldInclude = when {
+            configOptions.showInvalidPackages && isInvalidPackage -> true
+            configOptions.targetPackage.isNotEmpty() && isTargetGroupArtifact -> true
+            configOptions.includeSnapshot && isSnapshotDir -> true
+            else -> false
+        }
+
+        // 设置匹配类型
+        val matchType = when {
+            isInvalidPackage -> "invalid"
+            isTargetGroupArtifact -> "matched"
+            isSnapshotDir -> "snapshot"
+            else -> "unknown"
+        }
+
+        if (shouldInclude) {
+            onDirFound(pkgData.packageDir, matchType, pkgData)
         }
     }
 

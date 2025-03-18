@@ -134,11 +134,11 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                     val pipenvPath = getPipenvVirtualEnvPath(projectPath)
                     if (pipenvPath != null) {
                         environmentPath = findSitePackagesInVenv(pipenvPath)
-                    }
-                    environmentPath = if (environmentPath == null) {
-                        getPipenvCacheDirectory(pipenvPath!!)
-                    } else {
-                        environmentPath
+                        environmentPath = if (environmentPath == null) {
+                            getPipenvCacheDirectory(pipenvPath)
+                        } else {
+                            environmentPath
+                        }
                     }
                 }
             }
@@ -360,8 +360,14 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
             if (exitCode == 0 && output.isNotEmpty()) {
                 return output
             }
+        } catch (e: IOException) {
+            Messages.showErrorDialog(
+                project,
+                "Error: Failed to execute pipenv command. Error: ${e.message}",
+                "Command Error"
+            )
         } catch (e: Exception) {
-            // 命令执行失败，忽略异常
+            e.printStackTrace()
         }
 
         // 尝试检查~/.local/share/virtualenvs目录
@@ -1176,64 +1182,59 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
         return DependencyType.PIP
     }
 
-    /**
-     * 实现新的 scanRepository 方法，使用 ConfigOptions 对象
-     */
-    override fun scanRepository(
-        dir: File,
-        onDirFound: (File, String, PkgData) -> Unit,
-        configOptions: ConfigOptions
+    override fun eachScanEntry(
+        configOptions: ConfigOptions,
+        path: String,
+        pkgData: PkgData,
+        onDirFound: (File, String, PkgData) -> Unit
     ) {
         val targetPackageName = configOptions.targetPackage.takeIf { it.isNotEmpty() }?.lowercase()
-        val pathPkgDataMap = fetchPkgMap(dir)
 
-        pathPkgDataMap.forEach { (path, pkgData) ->
-            // 检查是否是invalid文件（损坏或未完成的下载）
-            val isInvalidPackage = pkgData.invalid
+        // 检查是否是invalid文件（损坏或未完成的下载）
+        val isInvalidPackage = pkgData.invalid
 
-            // 检查是否是snapshot版本（预发布版本：含有dev, a, alpha, b, beta, rc等标记）
-            val isSnapshotVersion = pkgData.packageName.contains(snapshotVersionRegex)
+        // 检查是否是snapshot版本（预发布版本：含有dev, a, alpha, b, beta, rc等标记）
+        val isSnapshotVersion = pkgData.packageName.contains(snapshotVersionRegex)
 
-            // 检查是否匹配指定的包名
-            val packageNameParts = pkgData.packageName.split(":")
-            val packageNameOnly = packageNameParts[0].lowercase()
+        // 检查是否匹配指定的包名
+        val packageNameParts = pkgData.packageName.split(":")
+        val packageNameOnly = packageNameParts[0].lowercase()
 
-            // Python包通常有下划线和连字符的变体，所以我们需要规范化进行比较
-            val normalizedPackageName = packageNameOnly.replace(pythonPackageNormalizeRegex, "-")
-            val normalizedTargetName = targetPackageName?.replace(pythonPackageNormalizeRegex, "-") ?: ""
+        // Python包通常有下划线和连字符的变体，所以我们需要规范化进行比较
+        val normalizedPackageName = packageNameOnly.replace(pythonPackageNormalizeRegex, "-")
+        val normalizedTargetName = targetPackageName?.replace(pythonPackageNormalizeRegex, "-") ?: ""
 
-            val isTargetPackage = when {
-                targetPackageName == null -> false // 如果没有指定包名，则不视为匹配
-                normalizedPackageName.startsWith(normalizedTargetName) -> true // 前缀匹配
-                packageNameOnly.endsWith(".$targetPackageName") -> true  // 处理子包情况
-                packageNameOnly.startsWith("$targetPackageName.") -> true  // 处理父包情况
-                else -> false
-            }
+        val isTargetPackage = when {
+            targetPackageName == null -> false // 如果没有指定包名，则不视为匹配
+            normalizedPackageName.startsWith(normalizedTargetName) -> true // 前缀匹配
+            packageNameOnly.endsWith(".$targetPackageName") -> true  // 处理子包情况
+            packageNameOnly.startsWith("$targetPackageName.") -> true  // 处理父包情况
+            else -> false
+        }
 
-            // 处理平台特定的二进制包（wheel包）
-            val isNativeBinary = pkgData.packageDir.name.matches(nativeBinaryRegex)
+        // 处理平台特定的二进制包（wheel包）
+        val isNativeBinary = pkgData.packageDir.name.matches(nativeBinaryRegex)
 
-            // 筛选逻辑
-            val shouldInclude = when {
-                configOptions.showInvalidPackages && isInvalidPackage -> true
-                configOptions.targetPackage.isNotEmpty() && isTargetPackage -> true
-                configOptions.includeSnapshot && isSnapshotVersion -> true
-                configOptions.showPlatformSpecificBinaries && isNativeBinary -> true
-                else -> false
-            }
+        // 筛选逻辑
+        val shouldInclude = when {
+            configOptions.showInvalidPackages && isInvalidPackage -> true
+            configOptions.targetPackage.isNotEmpty() && isTargetPackage -> true
+            configOptions.includeSnapshot && isSnapshotVersion -> true
+            configOptions.showPlatformSpecificBinaries && isNativeBinary -> true
+            else -> false
+        }
 
-            // 设置匹配类型
-            val matchType = when {
-                isInvalidPackage -> "invalid"
-                isTargetPackage -> "matched"
-                isSnapshotVersion -> "prerelease"
-                isNativeBinary -> "platform"
-                else -> "unknown"
-            }
+        // 设置匹配类型
+        val matchType = when {
+            isInvalidPackage -> "invalid"
+            isTargetPackage -> "matched"
+            isSnapshotVersion -> "prerelease"
+            isNativeBinary -> "platform"
+            else -> "unknown"
+        }
 
-            if (shouldInclude) {
-                onDirFound(pkgData.packageDir, matchType, pkgData)
-            }
+        if (shouldInclude) {
+            onDirFound(pkgData.packageDir, matchType, pkgData)
         }
     }
 

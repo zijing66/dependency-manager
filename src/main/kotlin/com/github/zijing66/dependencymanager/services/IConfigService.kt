@@ -21,8 +21,10 @@ interface IConfigService {
      * @return 清理预览摘要
      */
     fun previewCleanup(
-        configOptions: ConfigOptions
-    ): CleanupSummary
+        configOptions: ConfigOptions,
+        onProgress: (Int, Int) -> Unit,
+        onComplete: (CleanupSummary) -> Unit
+    )
 
     fun cleanupRepository(
         project: Project,

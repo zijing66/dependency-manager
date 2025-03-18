@@ -37,48 +37,66 @@ abstract class AbstractConfigService(project: Project) : IConfigService {
 
     abstract fun getTargetPackageInfo(rootDir: File, file: File): PkgData
 
+    abstract fun eachScanEntry(configOptions: ConfigOptions, path: String, pkgData: PkgData, onDirFound: (File, String, PkgData) -> Unit)
+
     /**
      * 扫描仓库目录，根据配置选项查找符合条件的包
-     * @param dir 要扫描的目录
-     * @param onDirFound 当找到符合条件的目录时的回调
-     * @param configOptions 配置选项对象，包含过滤条件
      */
-    abstract fun scanRepository(
-        dir: File,
-        onDirFound: (File, String, PkgData) -> Unit,
-        configOptions: ConfigOptions
-    )
-    
+    fun scanRepository(configOptions: ConfigOptions, repoDir: File,
+                       onEach: (ConfigOptions, String, PkgData, Int, Int) -> Unit,
+                       onDirFound: (File, String, PkgData) -> Unit,
+                       onComplete: () -> Unit) {
+        val pathPkgDataMap = fetchPkgMap(repoDir)
+        var index = 0
+        val totalItemCount = pathPkgDataMap.size
+        pathPkgDataMap.forEach { (path, pkgData) ->
+            index++
+            onEach(configOptions, path, pkgData, index, totalItemCount)
+            eachScanEntry(configOptions, path, pkgData, onDirFound)
+        }
+        onComplete()
+    }
+
+
     /**
      * 预览清理操作实现
      * @param configOptions 配置选项，包含 includeSnapshot, showInvalidPackages, showPlatformSpecificBinaries 等设置
      */
-    override fun previewCleanup(configOptions: ConfigOptions): CleanupSummary {
-        val repoDir = File(getLocalRepository(false))
-        val previewItems = mutableListOf<CleanupPreview>()
-        var totalSize = 0L
-
-        // 使用新的 scanRepository 接口
-        scanRepository(repoDir, { versionDir, matchType, pkgData ->
-            val dirSize = calculateDirSize(versionDir)
-            
-            previewItems.add(
-                CleanupPreview(
-                    path = versionDir.absolutePath,
-                    packageName = pkgData.packageName,
-                    fileSize = dirSize,
-                    lastModified = versionDir.lastModified(),
-                    dependencyType = getDependencyType(),
-                    relativePath = pkgData.relativePath,
-                    matchType = matchType
-                )
-            )
-            totalSize += dirSize
-        }, configOptions)
-
-        return CleanupSummary(
-            totalFiles = previewItems.size, totalSize = totalSize, previewItems = previewItems
-        )
+    override fun previewCleanup(configOptions: ConfigOptions,
+                                onProgress: (Int, Int) -> Unit,
+                                onComplete: (CleanupSummary) -> Unit) {
+        object : Task.Backgroundable(project, "Scanning ${getDependencyType().name} repository", true) {
+            override fun run(indicator: ProgressIndicator) {
+                val repoDir = File(getLocalRepository(false))
+                val previewItems = mutableListOf<CleanupPreview>()
+                var totalSize = 0L
+                scanRepository(
+                    configOptions, repoDir,
+                    { versionDir, matchType, pkgData, index, totalItemCount ->
+                        indicator.fraction = index.toDouble() / totalItemCount
+                        indicator.text = "Scanning file: $index / $totalItemCount"
+                        onProgress(index, totalItemCount)
+                    }, { versionDir, matchType, pkgData ->
+                        val dirSize = calculateDirSize(versionDir)
+                        previewItems.add(
+                            CleanupPreview(
+                                path = versionDir.absolutePath,
+                                packageName = pkgData.packageName,
+                                fileSize = dirSize,
+                                lastModified = versionDir.lastModified(),
+                                dependencyType = getDependencyType(),
+                                relativePath = pkgData.relativePath,
+                                matchType = matchType
+                            )
+                        )
+                        totalSize += dirSize
+                    }, {
+                        onComplete(CleanupSummary(
+                            totalFiles = previewItems.size, totalSize = totalSize, previewItems = previewItems
+                        ))
+                    })
+            }
+        }.queue()
     }
 
     override fun cleanupRepository(

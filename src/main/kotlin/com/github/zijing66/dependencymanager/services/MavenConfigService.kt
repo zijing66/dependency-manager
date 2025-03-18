@@ -6,9 +6,6 @@ import com.github.zijing66.dependencymanager.models.PkgData
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.project.Project
 import java.io.File
-import java.nio.file.Files
-import java.nio.file.Paths
-import java.util.Properties
 import javax.xml.parsers.DocumentBuilderFactory
 
 @Service(Service.Level.PROJECT)
@@ -93,58 +90,54 @@ class MavenConfigService(project: Project) : AbstractConfigService(project) {
         return DependencyType.MAVEN
     }
 
-    /**
-     * 实现新的 scanRepository 方法，使用 ConfigOptions 对象
-     */
-    override fun scanRepository(
-        dir: File, onDirFound: (File, String, PkgData) -> Unit, configOptions: ConfigOptions
+    override fun eachScanEntry(
+        configOptions: ConfigOptions,
+        path: String,
+        pkgData: PkgData,
+        onDirFound: (File, String, PkgData) -> Unit
     ) {
         val targetGroupArtifact = configOptions.targetPackage.takeIf { it.isNotEmpty() }?.split(":")
-        val pathPkgDataMap = fetchPkgMap(dir)
+        // 检查是否是SNAPSHOT目录
+        val isSnapshotDir = pkgData.packageName.contains(snapshotVersionRegex)
 
-        pathPkgDataMap.forEach { (path, pkgData) ->
-            // 检查是否是SNAPSHOT目录
-            val isSnapshotDir = pkgData.packageName.contains(snapshotVersionRegex)
-
-            // 检查是否匹配指定的group/artifact
-            val isTargetGroupArtifact = when (targetGroupArtifact?.size) {
-                2 -> {
-                    val (group, artifact) = targetGroupArtifact
-                    pkgData.packageName.startsWith("${group}:${artifact}")
-                }
-
-                1 -> {
-                    val group = targetGroupArtifact[0]
-                    pkgData.packageName.startsWith(group)
-                }
-
-                else -> {
-                    false
-                }
+        // 检查是否匹配指定的group/artifact
+        val isTargetGroupArtifact = when (targetGroupArtifact?.size) {
+            2 -> {
+                val (group, artifact) = targetGroupArtifact
+                pkgData.packageName.startsWith("${group}:${artifact}")
             }
 
-            // 检查是否有lastUpdated文件（失效包）
-            val hasLastUpdated = pkgData.invalid
-
-            // 筛选逻辑
-            val shouldInclude = when {
-                configOptions.showInvalidPackages && hasLastUpdated -> true
-                configOptions.targetPackage.isNotEmpty() && isTargetGroupArtifact -> true
-                configOptions.includeSnapshot && isSnapshotDir -> true
-                else -> false
+            1 -> {
+                val group = targetGroupArtifact[0]
+                pkgData.packageName.startsWith(group)
             }
 
-            // 设置匹配类型
-            val matchType = when {
-                hasLastUpdated -> "invalid"
-                configOptions.targetPackage.isNotEmpty() && isTargetGroupArtifact -> "matched"
-                isSnapshotDir -> "snapshot"
-                else -> "unknown"
+            else -> {
+                false
             }
+        }
 
-            if (shouldInclude) {
-                onDirFound(pkgData.packageDir, matchType, pkgData)
-            }
+        // 检查是否有lastUpdated文件（失效包）
+        val hasLastUpdated = pkgData.invalid
+
+        // 筛选逻辑
+        val shouldInclude = when {
+            configOptions.showInvalidPackages && hasLastUpdated -> true
+            configOptions.targetPackage.isNotEmpty() && isTargetGroupArtifact -> true
+            configOptions.includeSnapshot && isSnapshotDir -> true
+            else -> false
+        }
+
+        // 设置匹配类型
+        val matchType = when {
+            hasLastUpdated -> "invalid"
+            configOptions.targetPackage.isNotEmpty() && isTargetGroupArtifact -> "matched"
+            isSnapshotDir -> "snapshot"
+            else -> "unknown"
+        }
+
+        if (shouldInclude) {
+            onDirFound(pkgData.packageDir, matchType, pkgData)
         }
     }
 
