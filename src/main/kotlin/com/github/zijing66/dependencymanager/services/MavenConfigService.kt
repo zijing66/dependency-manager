@@ -94,7 +94,7 @@ class MavenConfigService(project: Project) : AbstractConfigService(project) {
         configOptions: ConfigOptions,
         path: String,
         pkgData: PkgData,
-        onDirFound: (File, String, PkgData) -> Unit
+        onResultFound: (File, String, PkgData) -> Unit
     ) {
         val targetGroupArtifact = configOptions.targetPackage.takeIf { it.isNotEmpty() }?.split(":")
         // 检查是否是SNAPSHOT目录
@@ -137,7 +137,7 @@ class MavenConfigService(project: Project) : AbstractConfigService(project) {
         }
 
         if (shouldInclude) {
-            onDirFound(pkgData.packageDir, matchType, pkgData)
+            onResultFound(pkgData.packageDir, matchType, pkgData)
         }
     }
 

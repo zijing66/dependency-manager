@@ -7,9 +7,12 @@
 ## [1.1.1]
 
 ### Added
+
+- Scanning Progress Display
 - Added manual conda installation path selection and support for pip's conda mode with persistent configuration
 
 ### Fixed
+
 - Fixed pip cache path extraction exception
 
 ## [1.1.0]

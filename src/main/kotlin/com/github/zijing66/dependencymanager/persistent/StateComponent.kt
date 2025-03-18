@@ -7,6 +7,6 @@ import com.intellij.openapi.components.*
 class StateComponent : SimplePersistentStateComponent<StateComponent.State>(State()) {
 
     class State : BaseState() {
-        var condaInstallationPath by string("")
+        var condaInstallationPath by string(null)
     }
 }

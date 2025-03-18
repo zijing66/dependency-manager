@@ -388,87 +388,6 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
         return null
     }
 
-    private fun getCondaEnvironmentName(projectPath: String): String? {
-        // 从conda环境文件中读取环境名称
-        val envFile = when {
-            File("$projectPath/environment.yml").exists() -> File("$projectPath/environment.yml")
-            File("$projectPath/conda-env.yml").exists() -> File("$projectPath/conda-env.yml")
-            else -> return null
-        }
-
-        val content = envFile.readText()
-        val nameMatch = condaNameRegex.find(content)
-        return nameMatch?.groupValues?.get(1)
-    }
-
-    private fun getCondaEnvironmentPath(envName: String): String? {
-        // 查找conda命令的位置
-        val condaCmd = findCondaCommand()
-
-        if (condaCmd != null) {
-            try {
-                val process = ProcessBuilder(condaCmd, "info", "--json")
-                    .redirectErrorStream(true)
-                    .start()
-
-                val output = process.inputStream.bufferedReader().readText()
-                val exitCode = process.waitFor()
-
-                if (exitCode == 0 && output.isNotEmpty()) {
-                    // 使用简单正则表达式解析JSON输出
-                    val envDirsMatch = condaEnvDirsRegex.find(output)
-                    val envDirsStr = envDirsMatch?.groupValues?.get(1) ?: return null
-
-                    // 解析环境目录列表
-                    val envDirs = envDirsStr.split(",")
-                        .map { it.trim().trim('"') }
-                        .filter { it.isNotEmpty() }
-
-                    // 在每个环境目录中查找指定的环境
-                    for (envDir in envDirs) {
-                        val fullEnvPath = File("$envDir/$envName")
-                        if (fullEnvPath.exists() && fullEnvPath.isDirectory) {
-                            return fullEnvPath.absolutePath
-                        }
-                    }
-                }
-            } catch (e: IOException) {
-                Messages.showErrorDialog(
-                    project,
-                    "Error: Failed to execute Conda command. Error: ${e.message}",
-                    "Command Error"
-                )
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        } else {
-            Messages.showErrorDialog(
-                project,
-                "Error: Conda command not found. Please ensure Conda is installed and set the correct Conda installation directory.",
-                "Command Error"
-            )
-        }
-
-        // 如果无法通过conda命令获取，使用默认路径
-        val userHome = System.getProperty("user.home")
-        val defaultCondaPaths = listOf(
-            "$userHome/anaconda3/envs/$envName",
-            "$userHome/miniconda3/envs/$envName",
-            "C:/ProgramData/Anaconda3/envs/$envName",
-            "C:/ProgramData/Miniconda3/envs/$envName",
-            "/opt/anaconda3/envs/$envName",
-            "/opt/miniconda3/envs/$envName"
-        )
-
-        for (path in defaultCondaPaths) {
-            if (File(path).exists()) {
-                return path
-            }
-        }
-
-        return null
-    }
-
     /**
      * 根据当前环境设置查找conda命令的位置
      * @return conda命令的完整路径，如果找不到则返回null
@@ -1186,7 +1105,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
         configOptions: ConfigOptions,
         path: String,
         pkgData: PkgData,
-        onDirFound: (File, String, PkgData) -> Unit
+        onResultFound: (File, String, PkgData) -> Unit
     ) {
         val targetPackageName = configOptions.targetPackage.takeIf { it.isNotEmpty() }?.lowercase()
 
@@ -1234,7 +1153,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
         }
 
         if (shouldInclude) {
-            onDirFound(pkgData.packageDir, matchType, pkgData)
+            onResultFound(pkgData.packageDir, matchType, pkgData)
         }
     }
 

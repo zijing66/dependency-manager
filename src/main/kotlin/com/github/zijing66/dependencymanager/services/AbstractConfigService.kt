@@ -6,9 +6,7 @@ import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
 import java.io.File
 
-abstract class AbstractConfigService(project: Project) : IConfigService {
-
-    protected val project: Project = project
+abstract class AbstractConfigService(protected val project: Project) : IConfigService {
 
     // 最大遍历深度，防止无限递归
     private val MAX_DIRECTORY_DEPTH = 20
@@ -37,24 +35,25 @@ abstract class AbstractConfigService(project: Project) : IConfigService {
 
     abstract fun getTargetPackageInfo(rootDir: File, file: File): PkgData
 
-    abstract fun eachScanEntry(configOptions: ConfigOptions, path: String, pkgData: PkgData, onDirFound: (File, String, PkgData) -> Unit)
+    abstract fun eachScanEntry(configOptions: ConfigOptions, path: String, pkgData: PkgData, onResultFound: (File, String, PkgData) -> Unit)
 
     /**
      * 扫描仓库目录，根据配置选项查找符合条件的包
      */
     fun scanRepository(configOptions: ConfigOptions, repoDir: File,
-                       onEach: (ConfigOptions, String, PkgData, Int, Int) -> Unit,
-                       onDirFound: (File, String, PkgData) -> Unit,
-                       onComplete: () -> Unit) {
-        val pathPkgDataMap = fetchPkgMap(repoDir)
+                       onDirectoryScanned: (File) -> Unit,
+                       onResultJudged: (ConfigOptions, String, PkgData, Int, Int) -> Unit,
+                       onResultFound: (File, String, PkgData) -> Unit,
+                       onComplete: (Int) -> Unit) {
+        val pathPkgDataMap = fetchPkgMap(repoDir, onDirectoryScanned)
         var index = 0
         val totalItemCount = pathPkgDataMap.size
         pathPkgDataMap.forEach { (path, pkgData) ->
             index++
-            onEach(configOptions, path, pkgData, index, totalItemCount)
-            eachScanEntry(configOptions, path, pkgData, onDirFound)
+            onResultJudged(configOptions, path, pkgData, index, totalItemCount)
+            eachScanEntry(configOptions, path, pkgData, onResultFound)
         }
-        onComplete()
+        onComplete(totalItemCount)
     }
 
 
@@ -70,11 +69,16 @@ abstract class AbstractConfigService(project: Project) : IConfigService {
                 val repoDir = File(getLocalRepository(false))
                 val previewItems = mutableListOf<CleanupPreview>()
                 var totalSize = 0L
+                var dirScannedCount = 0
                 scanRepository(
                     configOptions, repoDir,
-                    { versionDir, matchType, pkgData, index, totalItemCount ->
+                    {
+                        dirScannedCount++
+                        indicator.text = "Scanning directory: $dirScannedCount"
+                    },
+                    { _, _, _, index, totalItemCount ->
                         indicator.fraction = index.toDouble() / totalItemCount
-                        indicator.text = "Scanning file: $index / $totalItemCount"
+                        indicator.text = "Scanning package: $index / $totalItemCount"
                         onProgress(index, totalItemCount)
                     }, { versionDir, matchType, pkgData ->
                         val dirSize = calculateDirSize(versionDir)
@@ -90,9 +94,12 @@ abstract class AbstractConfigService(project: Project) : IConfigService {
                             )
                         )
                         totalSize += dirSize
-                    }, {
+                    }, { totalScannedCount ->
                         onComplete(CleanupSummary(
-                            totalFiles = previewItems.size, totalSize = totalSize, previewItems = previewItems
+                            totalScannedCount = totalScannedCount,
+                            totalCount = previewItems.size,
+                            totalSize = totalSize,
+                            previewItems = previewItems
                         ))
                     })
             }
@@ -159,12 +166,12 @@ abstract class AbstractConfigService(project: Project) : IConfigService {
         }.queue()
     }
 
-    protected fun fetchPkgMap(rootDir: File): MutableMap<String, PkgData> {
+    private fun fetchPkgMap(rootDir: File, onDirectoryScanned: (File) -> Unit): MutableMap<String, PkgData> {
         if (!rootDir.isDirectory()) {
             return mutableMapOf()
         }
         val pathPkgDataMap = mutableMapOf<String, PkgData>()
-        travelDirectory(rootDir, rootDir, pathPkgDataMap, 0)
+        travelDirectory(rootDir, rootDir, pathPkgDataMap, 0, onDirectoryScanned)
         return pathPkgDataMap
     }
 
@@ -175,7 +182,7 @@ abstract class AbstractConfigService(project: Project) : IConfigService {
      */
     protected abstract fun shouldExcludeDirectory(dir: File): Boolean
 
-    private fun travelDirectory(rootDir: File, startDir: File, packagePathMap: MutableMap<String, PkgData>, depth: Int = 0) {
+    private fun travelDirectory(rootDir: File, startDir: File, packagePathMap: MutableMap<String, PkgData>, depth: Int = 0, onDirectoryScanned: (File) -> Unit) {
         // 防止过深目录遍历
         if (depth > MAX_DIRECTORY_DEPTH) {
             return
@@ -183,9 +190,10 @@ abstract class AbstractConfigService(project: Project) : IConfigService {
 
         startDir.listFiles()?.forEach { file ->
             if (file.isDirectory) {
+                onDirectoryScanned(file)
                 // 使用shouldExcludeDirectory检查目录是否应被排除
                 if (!shouldExcludeDirectory(file)) {
-                    travelDirectory(rootDir, file, packagePathMap, depth + 1)
+                    travelDirectory(rootDir, file, packagePathMap, depth + 1, onDirectoryScanned)
                 }
             } else {
                 val relativePath = file.parentFile?.relativeTo(rootDir)?.path?.replace('\\', '/')

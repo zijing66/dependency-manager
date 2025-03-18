@@ -698,7 +698,7 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
                     previewModel.setData(currentPreview.previewItems)
                     headerCheckBox.isSelected = false
                     val totalSize = formatFileSize(currentPreview.totalSize)
-                    statusLabel.text = "Found ${currentPreview.totalFiles} files (Total size: $totalSize)"  // 添加总大小标识
+                    statusLabel.text = "Scanned ${currentPreview.totalScannedCount} files, Found ${currentPreview.totalCount} files, (Total size: $totalSize)"  // 添加总大小标识
                     progressBar.isVisible = false
                     previewTable.parent.parent.isVisible = true
                 }

@@ -610,7 +610,7 @@ class NPMConfigService(project: Project) : AbstractConfigService(project) {
         return DependencyType.NPM
     }
 
-    override fun eachScanEntry(configOptions: ConfigOptions, path: String, pkgData: PkgData, onDirFound: (File, String, PkgData) -> Unit) {
+    override fun eachScanEntry(configOptions: ConfigOptions, path: String, pkgData: PkgData, onResultFound: (File, String, PkgData) -> Unit) {
         val targetPackageName = configOptions.targetPackage.takeIf { it.isNotEmpty() }
         val separator = getPackageNameSeparator()
         // 检查是否是invalid文件（损坏或未完成的下载）
@@ -634,12 +634,6 @@ class NPMConfigService(project: Project) : AbstractConfigService(project) {
                     ) -> true
             else -> false
         }
-
-        // 检查是否包含版本号
-        val hasVersion = pkgData.packageName.contains(separator) &&
-                !pkgData.packageName.endsWith("${separator}unknown") &&
-                !pkgData.packageName.endsWith(separator) &&
-                pkgData.packageName.split(separator).size > 1
 
         // 特殊处理win32-x64等平台特定目录
         val isNativeBinary = pkgData.packageDir.name.matches(nativeBinaryRegex)
@@ -712,7 +706,7 @@ class NPMConfigService(project: Project) : AbstractConfigService(project) {
         }
 
         if (shouldInclude) {
-            onDirFound(adjustedPkgData.packageDir, matchType, adjustedPkgData)
+            onResultFound(adjustedPkgData.packageDir, matchType, adjustedPkgData)
         }
     }
 
