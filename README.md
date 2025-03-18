@@ -7,10 +7,10 @@
 <!-- Plugin description -->
 IDE plugin for cleaning project dependencies. Key features:
 
-✅ Automatic dependency type detection (Maven/Gradle...)  
+✅ Automatic dependency type detection (Maven/Gradle/Npm/Pip)    
 ✅ Visual preview of cleanup candidates  
-✅ Support deleting failed Maven downloads  
-✅ Support deleting SNAPSHOT packages and specified groupId/artifactId  
+✅ Support deleting failed downloads  
+✅ Support deleting SNAPSHOT packages and specified package name  
 ✅ Multi-threaded cleanup with progress monitoring  
 ✅ Cross-platform support  
 

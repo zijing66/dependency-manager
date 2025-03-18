@@ -2,6 +2,16 @@
 
 [English Change Log](CHANGELOG.md)
 
+## [1.1.1]
+
+### 新增
+
+- pip的conda模式支持手动选择conda安装路径，可持久化
+
+### 修复
+
+- 修复了pip的缓存路径提取异常问题
+
 ## [1.1.0]
 
 ### 新增
