@@ -928,13 +928,14 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
                 pathField.text = currentRepoPath
             } else {
                 // 如果用户取消了选择，清空路径并更新UI
-                pipConfigService.updateLocalRepository("")
+                pipConfigService.cleanLocalRepository()
                 currentRepoPath = ""
                 pathField.text = ""
             }
 
         } else if (newPath.isEmpty() || !File(newPath).exists()) {
             // 如果路径无效，清空文本框
+            pipConfigService.cleanLocalRepository()
             pathField.text = ""
             currentRepoPath = ""
         }

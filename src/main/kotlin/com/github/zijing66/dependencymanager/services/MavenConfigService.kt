@@ -64,6 +64,10 @@ class MavenConfigService(project: Project) : AbstractConfigService(project) {
         }
     }
 
+    override fun cleanLocalRepository() {
+        customRepoPath = null
+    }
+
     override fun isTargetFile(file: File): Boolean {
         return file.isFile && (file.name.endsWith(".jar") || file.name.endsWith(".pom") || 
                              file.name.endsWith(".jar.lastUpdated") || file.name.endsWith(".pom.lastUpdated"))
