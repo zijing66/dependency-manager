@@ -99,11 +99,20 @@ abstract class AbstractConfigService(project: Project) : IConfigService {
                     val file = File(item.path)
                     var success = true
                     if (item.matchType == "invalid") {
-                        // 无效的目录，删除无效文件
-                        file.listFiles()?.forEach { subFile ->
-                            if (isTargetInvalidFile(subFile)) {
-                                success = subFile.delete() && success
+                        // 其他情况，删除指定文件或目录
+                        success = if (file.isDirectory) {
+                            // 无效的目录，删除无效文件
+                            file.listFiles()?.forEach { subFile ->
+                                if (isTargetInvalidFile(subFile)) {
+                                    success = subFile.delete() && success
+                                }
                             }
+                            success
+                        } else {
+                            if (isTargetInvalidFile(file)) {
+                                success = file.delete()
+                            }
+                            success
                         }
                     } else {
                         // 其他情况，删除指定文件或目录
