@@ -4,7 +4,9 @@ import com.github.zijing66.dependencymanager.models.ConfigOptions
 import com.github.zijing66.dependencymanager.models.DependencyType
 import com.github.zijing66.dependencymanager.models.PkgData
 import com.github.zijing66.dependencymanager.models.PythonEnvironmentType
+import com.github.zijing66.dependencymanager.persistent.StateComponent
 import com.intellij.openapi.components.Service
+import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import java.io.File
@@ -13,6 +15,8 @@ import java.util.*
 
 @Service(Service.Level.PROJECT)
 class PIPConfigService(project: Project) : AbstractConfigService(project) {
+
+    private var stateComponent: StateComponent = service<StateComponent>()
 
     private var customRepoPath: String? = null
     private var environmentType: PythonEnvironmentType = PythonEnvironmentType.SYSTEM
@@ -51,36 +55,77 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
     private val condaEnvDirsRegex = Regex("\"envs_dirs\"\\s*:\\s*\\[([^]]+)]")
 
     /**
-     * 设置Python环境类型并清除自定义路径
-     * 当UI中选择不同的环境类型时调用此方法
-     * @param type 环境类型
+     * 检测并初始化Python环境
+     * 该方法会检测项目中常见的Python环境标志并设置相应的环境类型
+     * @return 检测到的环境类型
      */
-    fun setEnvironmentType(type: PythonEnvironmentType) {
-        // 如果环境类型没有变化，不需要刷新
-        if (environmentType == type && environmentPath != null) {
-            return
+    fun detectPythonEnvironment(): PythonEnvironmentType {
+        val projectPath = project.basePath ?: return PythonEnvironmentType.SYSTEM
+
+        val environmentType: PythonEnvironmentType
+        // 检测项目中的虚拟环境
+        when {
+            // 检查venv目录
+            File("$projectPath/venv").exists() ||
+                    File("$projectPath/.venv").exists() -> {
+                environmentType = PythonEnvironmentType.VENV
+            }
+            // 检查Pipenv
+            File("$projectPath/Pipfile").exists() -> {
+                environmentType = PythonEnvironmentType.PIPENV
+            }
+            // 检查Conda环境
+            File("$projectPath/environment.yml").exists() ||
+                    File("$projectPath/conda-env.yml").exists() -> {
+                environmentType = PythonEnvironmentType.CONDA
+            }
+            // 检查系统Python
+            else -> {
+                environmentType = PythonEnvironmentType.SYSTEM
+            }
         }
-        
+        return environmentType
+    }
+
+    private fun updateEnvironmentType(type: PythonEnvironmentType) {
         environmentType = type
         // 清除环境路径和自定义路径，强制重新检测
         environmentPath = null
         customRepoPath = null
-        
+
         // 根据环境类型选择性地刷新对应环境数据
         when (type) {
             PythonEnvironmentType.VENV -> {
-                environmentPath = findVenvPath()?.let { findSitePackagesInVenv(it) }
+                val venvPath = findVenvPath()
+                environmentPath = venvPath?.let { findSitePackagesInVenv(it) }
+                environmentPath = if (environmentPath == null) {
+                    getVenvCacheDirectory(venvPath!!)
+                } else {
+                    environmentPath
+                }
             }
             PythonEnvironmentType.CONDA -> {
                 // 如果已经有condaInstallPath但环境路径为空，尝试重新查找
+                if (condaInstallPath == null) {
+                    condaInstallPath = stateComponent.state.condaInstallationPath
+                }
+                if (condaInstallPath == null) {
+                    condaInstallPath = detectCondaInstallation()
+                }
                 if (condaInstallPath != null) {
+                    if (!condaInstallPath.equals(stateComponent.state.condaInstallationPath)) {
+                        stateComponent.state.condaInstallationPath = condaInstallPath
+                    }
+
                     val sitePkgsPath = findSitePackagesInConda(condaInstallPath!!)
                     if (sitePkgsPath != null) {
                         environmentPath = sitePkgsPath
                     }
-                } else {
-                    // 尝试检测conda安装
-                    detectCondaInstallation()
+                    environmentPath = if (environmentPath == null) {
+                        getCondaCacheDirectory(condaInstallPath!!)
+                    } else {
+                        environmentPath
+                    }
                 }
             }
             PythonEnvironmentType.PIPENV -> {
@@ -90,123 +135,45 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                     if (pipenvPath != null) {
                         environmentPath = findSitePackagesInVenv(pipenvPath)
                     }
+                    environmentPath = if (environmentPath == null) {
+                        getPipenvCacheDirectory(pipenvPath!!)
+                    } else {
+                        environmentPath
+                    }
                 }
             }
             PythonEnvironmentType.SYSTEM -> {
                 // 查找系统Python的site-packages
                 environmentPath = findSystemPythonSitePackages()
+                environmentPath = if (environmentPath == null) {
+                    getPipCacheDirectory()
+                } else {
+                    environmentPath
+                }
             }
         }
     }
 
     /**
-     * 判断Python相关的目录是否应该被排除
-     * @param dir 要检查的目录
-     * @return 如果目录应该被排除则返回true
+     * 设置Python环境类型并清除自定义路径
+     * 当UI中选择不同的环境类型时调用此方法
+     * @param type 环境类型
      */
-    override fun shouldExcludeDirectory(dir: File): Boolean {
-        // 如果是site-packages目录下的文件，特殊处理
-        if (dir.path.contains("site-packages")) {
-            // 直接在site-packages下
-            val parentName = dir.parentFile?.name
-            if (parentName == "site-packages") {
-                // 仅排除常见的非包目录
-                return dir.name == "__pycache__" || 
-                       dir.name == "tests" || 
-                       dir.name == "test" || 
-                       dir.name == ".pytest_cache" ||
-                       dir.name.startsWith("pip-") || // pip元数据目录
-                       dir.name.startsWith("setuptools-") // setuptools元数据目录
-            }
-            // 针对dist-info和egg-info目录不再深入遍历，一次性获取元数据
-            else if (dir.parentFile?.name?.endsWith(".dist-info") == true || 
-                     dir.parentFile?.name?.endsWith(".egg-info") == true) {
-                return true
-            }
-            
-            // 处理包内部目录，排除测试和缓存目录
-            return dir.name == "__pycache__" || 
-                   dir.name == "tests" || 
-                   dir.name == "test" || 
-                   dir.name == ".pytest_cache"
+    fun setEnvironmentType(type: PythonEnvironmentType) {
+        // 如果环境类型没有变化，不需要刷新
+        if (environmentType == type && environmentPath != null) {
+            return
         }
-        
-        // 排除以点开头的目录（如.venv等）
-        if (dir.name.startsWith(".")) {
-            return true
-        }
-        
-        // 排除commonPythonExclusions中的目录
-        if (dir.name in commonPythonExclusions) {
-            return true
-        }
-        
-        // 特别处理Python虚拟环境中的特殊情况
-        when (environmentType) {
-            PythonEnvironmentType.VENV, PythonEnvironmentType.PIPENV -> {
-                // 虚拟环境中的lib/python*/site-packages/pkg_resources目录可能包含大量符号链接
-                if (dir.path.contains("site-packages") && 
-                    (dir.name == "pkg_resources" || dir.name == ".nspkg-patches")) {
-                    return true
-                }
-            }
-            PythonEnvironmentType.CONDA -> {
-                // Conda环境中的pkgs目录包含缓存的包，不需要遍历
-                if (dir.name == "pkgs" && dir.path.contains("conda") && dir.path.contains("envs")) {
-                    return true
-                }
-                // conda-meta目录包含元数据，不需要遍历
-                if (dir.name == "conda-meta") {
-                    return true
-                }
-            }
-            else -> {
-                // 处理系统Python中的情况
-            }
-        }
-        
-        // 处理pip缓存目录，限制遍历只到获取包名版本号的层级
-        if (dir.path.contains("pip/Cache") || 
-            dir.path.contains("pip/cache") || 
-            dir.path.contains("pip\\Cache")) {
-            
-            // pip缓存目录通常是按哈希值组织的
-            if (dir.name.length == 2 && dir.isDirectory) {
-                // 这是缓存根目录的第一级哈希目录（两个字符），保留
-                return false
-            } else if (dir.parentFile?.name?.length == 2 && dir.name.matches(hashDirectoryRegex)) {
-                // 这是第二级哈希目录，包含了实际的包文件，保留
-                return false
-            } else if (dir.path.contains("http") || dir.path.contains("https")) {
-                // 这是源缓存目录，不需要深入遍历
-                return dir.listFiles()?.none { it.isFile && (it.name.endsWith(".whl") || it.name.endsWith(".tar.gz")) } ?: true
-            }
-        }
-        
-        // 排除一些特殊工具创建的缓存目录
-        if (dir.name.endsWith(".dist-info") && dir.path.contains("site-packages")) {
-            try {
-                val installerFile = File(dir, "INSTALLER")
-                if (installerFile.exists() && installerFile.readText().contains("pip")) {
-                    return true
-                }
-            } catch (e: Exception) {
-                // 如果读取失败，不排除该目录
-                return false
-            }
-        }
-        
-        return false
+        updateEnvironmentType(type)
     }
-
 
     /**
      * 检测conda安装位置
      */
-    private fun detectCondaInstallation() {
+    private fun detectCondaInstallation(): String? {
         val userHome = System.getProperty("user.home")
         val osName = System.getProperty("os.name").lowercase(Locale.getDefault())
-        
+
         // Conda/Miniconda可能的安装位置
         val possibleCondaPaths = when {
             osName.contains("win") -> listOf(
@@ -228,20 +195,114 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                 "$userHome/miniconda3"
             )
         }
-        
+
         // 尝试找到Conda安装位置
         for (condaPath in possibleCondaPaths) {
             if (File(condaPath).exists() && isValidCondaDir(condaPath)) {
-                condaInstallPath = condaPath
-                
-                // 检查site-packages目录
-                val sitePkgsPath = findSitePackagesInConda(condaPath)
-                if (sitePkgsPath != null) {
-                    environmentPath = sitePkgsPath
-                    break
-                }
+                return condaPath
             }
         }
+        return null
+    }
+
+    /**
+     * 判断Python相关的目录是否应该被排除
+     * @param dir 要检查的目录
+     * @return 如果目录应该被排除则返回true
+     */
+    override fun shouldExcludeDirectory(dir: File): Boolean {
+        // 如果是site-packages目录下的文件，特殊处理
+        if (dir.path.contains("site-packages")) {
+            // 直接在site-packages下
+            val parentName = dir.parentFile?.name
+            if (parentName == "site-packages") {
+                // 仅排除常见的非包目录
+                return dir.name == "__pycache__" ||
+                       dir.name == "tests" ||
+                       dir.name == "test" ||
+                       dir.name == ".pytest_cache" ||
+                       dir.name.startsWith("pip-") || // pip元数据目录
+                       dir.name.startsWith("setuptools-") // setuptools元数据目录
+            }
+            // 针对dist-info和egg-info目录不再深入遍历，一次性获取元数据
+            else if (dir.parentFile?.name?.endsWith(".dist-info") == true ||
+                     dir.parentFile?.name?.endsWith(".egg-info") == true) {
+                return true
+            }
+
+            // 处理包内部目录，排除测试和缓存目录
+            return dir.name == "__pycache__" ||
+                   dir.name == "tests" ||
+                   dir.name == "test" ||
+                   dir.name == ".pytest_cache"
+        }
+
+        // 排除以点开头的目录（如.venv等）
+        if (dir.name.startsWith(".")) {
+            return true
+        }
+
+        // 排除commonPythonExclusions中的目录
+        if (dir.name in commonPythonExclusions) {
+            return true
+        }
+
+        // 特别处理Python虚拟环境中的特殊情况
+        when (environmentType) {
+            PythonEnvironmentType.VENV, PythonEnvironmentType.PIPENV -> {
+                // 虚拟环境中的lib/python*/site-packages/pkg_resources目录可能包含大量符号链接
+                if (dir.path.contains("site-packages") &&
+                    (dir.name == "pkg_resources" || dir.name == ".nspkg-patches")) {
+                    return true
+                }
+            }
+            PythonEnvironmentType.CONDA -> {
+                // Conda环境中的pkgs目录包含缓存的包，不需要遍历
+                if (dir.name == "pkgs" && dir.path.contains("conda") && dir.path.contains("envs")) {
+                    return true
+                }
+                // conda-meta目录包含元数据，不需要遍历
+                if (dir.name == "conda-meta") {
+                    return true
+                }
+            }
+            else -> {
+                // 处理系统Python中的情况
+            }
+        }
+
+        // 处理pip缓存目录，限制遍历只到获取包名版本号的层级
+        if (dir.path.contains("pip/Cache") ||
+            dir.path.contains("pip/cache") ||
+            dir.path.contains("pip\\Cache")) {
+
+            // pip缓存目录通常是按哈希值组织的
+            if (dir.name.length == 2 && dir.isDirectory) {
+                // 这是缓存根目录的第一级哈希目录（两个字符），保留
+                return false
+            } else if (dir.parentFile?.name?.length == 2 && dir.name.matches(hashDirectoryRegex)) {
+                // 这是第二级哈希目录，包含了实际的包文件，保留
+                return false
+            } else if (dir.path.contains("http") || dir.path.contains("https")) {
+                // 这是源缓存目录，不需要深入遍历
+                return dir.listFiles()?.none { it.isFile && (it.name.endsWith(".whl") || it.name.endsWith(".tar.gz")) } ?: true
+            }
+        }
+
+        // 排除一些特殊工具创建的缓存目录
+        if (dir.name.endsWith(".dist-info") && dir.path.contains("site-packages")) {
+            try {
+                val installerFile = File(dir, "INSTALLER")
+                if (installerFile.exists() && installerFile.readText().contains("pip")) {
+                    return true
+                }
+            } catch (e: Exception) {
+                // 如果读取失败，不排除该目录
+                return false
+            }
+        }
+
+        return false
     }
 
     /**
@@ -266,14 +327,14 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
         if (File(sitePkgsPathWin).exists()) {
             return sitePkgsPathWin
         }
-        
+
         // 对于Unix系统，尝试找到python3.*目录
         val libDir = File("$condaPath/lib")
         if (libDir.exists() && libDir.isDirectory) {
-            val pythonDirs = libDir.listFiles { file -> 
+            val pythonDirs = libDir.listFiles { file ->
                 file.isDirectory && file.name.startsWith("python3")
             }
-            
+
             if (pythonDirs?.isNotEmpty() == true) {
                 val sitePkgs = "${pythonDirs[0].absolutePath}/site-packages"
                 if (File(sitePkgs).exists()) {
@@ -281,7 +342,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                 }
             }
         }
-        
+
         return null
     }
 
@@ -292,32 +353,32 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                 .directory(File(projectPath))
                 .redirectErrorStream(true)
                 .start()
-            
+
             val output = process.inputStream.bufferedReader().readText().trim()
             val exitCode = process.waitFor()
-            
+
             if (exitCode == 0 && output.isNotEmpty()) {
                 return output
             }
         } catch (e: Exception) {
             // 命令执行失败，忽略异常
         }
-        
+
         // 尝试检查~/.local/share/virtualenvs目录
         val userHome = System.getProperty("user.home")
         val pipenvRoot = File("$userHome/.local/share/virtualenvs")
         if (pipenvRoot.exists() && pipenvRoot.isDirectory) {
             // 查找与项目名称相关的虚拟环境
             val projectName = File(projectPath).name
-            val possibleEnvs = pipenvRoot.listFiles { file -> 
-                file.isDirectory && file.name.startsWith(projectName) 
+            val possibleEnvs = pipenvRoot.listFiles { file ->
+                file.isDirectory && file.name.startsWith(projectName)
             }
-            
+
             if (possibleEnvs?.isNotEmpty() == true) {
                 return possibleEnvs[0].absolutePath
             }
         }
-        
+
         return null
     }
 
@@ -328,7 +389,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
             File("$projectPath/conda-env.yml").exists() -> File("$projectPath/conda-env.yml")
             else -> return null
         }
-        
+
         val content = envFile.readText()
         val nameMatch = condaNameRegex.find(content)
         return nameMatch?.groupValues?.get(1)
@@ -337,26 +398,26 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
     private fun getCondaEnvironmentPath(envName: String): String? {
         // 查找conda命令的位置
         val condaCmd = findCondaCommand()
-        
+
         if (condaCmd != null) {
             try {
                 val process = ProcessBuilder(condaCmd, "info", "--json")
                     .redirectErrorStream(true)
                     .start()
-                
+
                 val output = process.inputStream.bufferedReader().readText()
                 val exitCode = process.waitFor()
-                
+
                 if (exitCode == 0 && output.isNotEmpty()) {
                     // 使用简单正则表达式解析JSON输出
                     val envDirsMatch = condaEnvDirsRegex.find(output)
                     val envDirsStr = envDirsMatch?.groupValues?.get(1) ?: return null
-                    
+
                     // 解析环境目录列表
                     val envDirs = envDirsStr.split(",")
                         .map { it.trim().trim('"') }
                         .filter { it.isNotEmpty() }
-                    
+
                     // 在每个环境目录中查找指定的环境
                     for (envDir in envDirs) {
                         val fullEnvPath = File("$envDir/$envName")
@@ -381,7 +442,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                 "Command Error"
             )
         }
-        
+
         // 如果无法通过conda命令获取，使用默认路径
         val userHome = System.getProperty("user.home")
         val defaultCondaPaths = listOf(
@@ -392,13 +453,13 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
             "/opt/anaconda3/envs/$envName",
             "/opt/miniconda3/envs/$envName"
         )
-        
+
         for (path in defaultCondaPaths) {
             if (File(path).exists()) {
                 return path
             }
         }
-        
+
         return null
     }
 
@@ -413,8 +474,8 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
             val condaExecutable = if (osName.contains("win")) {
                 // 检查常见的conda可执行文件位置
                 listOf(
-                    "$condaInstallPath/Scripts/conda.exe", 
-                    "$condaInstallPath/condabin/conda.bat", 
+                    "$condaInstallPath/Scripts/conda.exe",
+                    "$condaInstallPath/condabin/conda.bat",
                     "$condaInstallPath/condabin/conda.exe"
                 ).find { File(it).exists() }
             } else {
@@ -424,16 +485,16 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                     "$condaInstallPath/condabin/conda"
                 ).find { File(it).exists() }
             }
-            
+
             if (condaExecutable != null) {
                 return condaExecutable
             }
         }
-        
+
         // 如果condaInstallPath未设置或没找到conda，尝试检测系统路径
         val osName = System.getProperty("os.name").lowercase(Locale.getDefault())
         val userHome = System.getProperty("user.home")
-        
+
         // 可能的conda安装位置
         val possibleCondaPaths = if (osName.contains("win")) {
             listOf(
@@ -457,13 +518,13 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                 "$userHome/miniconda3"
             )
         }
-        
+
         // 检查每个可能的路径下的conda可执行文件
         for (basePath in possibleCondaPaths) {
             val condaExecutable = if (osName.contains("win")) {
                 listOf(
-                    "$basePath/Scripts/conda.exe", 
-                    "$basePath/condabin/conda.bat", 
+                    "$basePath/Scripts/conda.exe",
+                    "$basePath/condabin/conda.bat",
                     "$basePath/condabin/conda.exe"
                 ).find { File(it).exists() }
             } else {
@@ -472,14 +533,14 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                     "$basePath/condabin/conda"
                 ).find { File(it).exists() }
             }
-            
+
             if (condaExecutable != null) {
                 // 记录找到的conda安装路径
                 condaInstallPath = basePath
                 return condaExecutable
             }
         }
-        
+
         // 如果还是找不到，尝试使用PATH中的conda命令
         try {
             val process = if (osName.contains("win")) {
@@ -487,10 +548,10 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
             } else {
                 ProcessBuilder("which", "conda").start()
             }
-            
+
             val output = process.inputStream.bufferedReader().readText().trim()
             val exitCode = process.waitFor()
-            
+
             if (exitCode == 0 && output.isNotEmpty()) {
                 val condaPath = output.lines().firstOrNull()
                 if (condaPath != null && File(condaPath).exists()) {
@@ -503,7 +564,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
         } catch (e: Exception) {
             // 忽略异常，表示找不到conda命令
         }
-        
+
         return null
     }
 
@@ -511,7 +572,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
         // 获取pip标准缓存目录（非虚拟环境）
         val osName = System.getProperty("os.name").lowercase(Locale.getDefault())
         val userHome = System.getProperty("user.home")
-        
+
         return when {
             osName.contains("win") -> {
                 // Windows: pip缓存通常在 %LOCALAPPDATA%\pip\Cache
@@ -548,103 +609,41 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
         // 如果有自定义路径且不需要刷新，直接返回
         customRepoPath?.takeIf { !refresh && isValidRepoPath(it) }?.let { return it }
 
-        // 如果是刷新或者第一次调用，且不是由setEnvironmentType调用时
-        if ((refresh || environmentPath == null) && 
-            (refresh || Thread.currentThread().stackTrace.none { it.methodName == "setEnvironmentType" })) {
-            // 如果需要刷新，先检测环境
-            if (refresh) {
-                detectPythonEnvironment()
-            }
-            
-            // 根据环境类型选择性地刷新对应环境数据
-            when (environmentType) {
-                PythonEnvironmentType.VENV -> {
-                    environmentPath = findVenvPath()?.let { findSitePackagesInVenv(it) }
-                }
-                PythonEnvironmentType.CONDA -> {
-                    // 如果已经有condaInstallPath但没有环境路径，尝试重新查找
-                    if (condaInstallPath != null) {
-                        val sitePkgsPath = findSitePackagesInConda(condaInstallPath!!)
-                        if (sitePkgsPath != null) {
-                            environmentPath = sitePkgsPath
-                        }
-                    } else {
-                        // 尝试检测conda安装
-                        detectCondaInstallation()
-                    }
-                }
-                PythonEnvironmentType.PIPENV -> {
-                    val projectPath = project.basePath
-                    if (projectPath != null) {
-                        val pipenvPath = getPipenvVirtualEnvPath(projectPath)
-                        if (pipenvPath != null) {
-                            environmentPath = findSitePackagesInVenv(pipenvPath)
-                        }
-                    }
-                }
-                PythonEnvironmentType.SYSTEM -> {
-                    // 查找系统Python的site-packages
-                    environmentPath = findSystemPythonSitePackages()
-                }
-            }
-        }
-
         // 如果找到了site-packages路径，返回它
         if (environmentPath != null && File(environmentPath!!).exists() && isValidRepoPath(environmentPath!!)) {
             return environmentPath!!
         }
-
-        // 找不到site-packages目录，返回pip缓存目录
-        val cacheDir = when (environmentType) {
-            PythonEnvironmentType.VENV -> {
-                val venvPath = findVenvPath()
-                if (venvPath != null) getVenvCacheDirectory(venvPath) else getPipCacheDirectory()
-            }
-            PythonEnvironmentType.CONDA -> {
-                if (condaInstallPath != null) getCondaCacheDirectory(condaInstallPath!!) else getPipCacheDirectory()
-            }
-            PythonEnvironmentType.PIPENV -> {
-                val projectPath = project.basePath
-                val pipenvPath = if (projectPath != null) getPipenvVirtualEnvPath(projectPath) else null
-                if (pipenvPath != null) getPipenvCacheDirectory(pipenvPath) else getPipCacheDirectory()
-            }
-            else -> {
-                // 检查pip.conf或pip.ini中的配置
-                extractPipConfigCacheDir() ?: getPipCacheDirectory()
-            }
-        }
-        
-        return cacheDir.replace("\\", "/")
+        return environmentPath ?: ""
     }
-    
+
     /**
      * 查找virtualenv路径下特定的site-packages目录
      */
     private fun findVenvPath(): String? {
         val projectPath = project.basePath ?: return null
-        
+
         // 检查项目中常见的虚拟环境目录
         val venvDirs = listOf(
             "$projectPath/venv",
             "$projectPath/.venv",
             "$projectPath/env"
         )
-        
+
         for (venvDir in venvDirs) {
             if (File(venvDir).exists()) {
                 return venvDir
             }
         }
-        
+
         return null
     }
 
     private fun extractPipConfigCacheDir(): String? {
         // 检查pip.conf或pip.ini中的配置
         val pipConfigFile = when {
-            System.getProperty("os.name").lowercase(Locale.getDefault()).contains("win") -> 
+            System.getProperty("os.name").lowercase(Locale.getDefault()).contains("win") ->
                 File("${System.getenv("APPDATA") ?: "${System.getProperty("user.home")}/AppData/Roaming"}/pip/pip.ini")
-            else -> 
+            else ->
                 File("${System.getProperty("user.home")}/.config/pip/pip.conf")
         }
 
@@ -654,7 +653,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                 return cacheDir
             }
         }
-        
+
         return null
     }
 
@@ -667,6 +666,14 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
     override fun updateLocalRepository(newPath: String) {
         if (isValidRepoPath(newPath)) {
             customRepoPath = newPath
+            if (PythonEnvironmentType.CONDA == environmentType) {
+                // conda需要更新本地配置
+                val pathSplit = newPath.replace("\\", "/").split('/')
+                val condaIdx = pathSplit.indexOfLast { it.contains("conda") }
+                if (condaIdx >= 0) {
+                    stateComponent.state.condaInstallationPath = pathSplit.dropLast(pathSplit.size - condaIdx - 1).joinToString("/")
+                }
+            }
         } else {
             throw IllegalArgumentException("Invalid repository path: $newPath")
         }
@@ -684,32 +691,32 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                 file.name.endsWith(".tar.bz2") ||   // BZ2 压缩的源码包
                 file.name.endsWith(".tar.xz")       // XZ 压缩的源码包
             ) -> true
-            
+
             // 包元数据目录及文件
             file.name.endsWith(".egg-info") -> true        // 旧式 Egg 元数据
             file.name.endsWith(".dist-info") -> true       // 新式 Dist-info 元数据目录
-            
+
             // 重要的元数据文件
-            (file.name == "RECORD" || file.name == "METADATA" || file.name == "WHEEL") 
+            (file.name == "RECORD" || file.name == "METADATA" || file.name == "WHEEL")
                 && file.path.contains("dist-info") -> true  // Dist-info 中的关键文件
-            
+
             file.name == "PKG-INFO" && (
-                file.path.contains("egg-info") || 
-                file.path.contains(".dist-info") || 
+                file.path.contains("egg-info") ||
+                file.path.contains(".dist-info") ||
                 file.parentFile?.name == "EGG-INFO"
             ) -> true  // 包信息文件
-            
+
             // 安装目录中的关键文件
-            file.name == "setup.py" && 
+            file.name == "setup.py" &&
                 (file.parentFile?.name?.contains("-") == true) -> true  // 源码包中的安装文件
-            
-            file.name == "direct_url.json" && 
+
+            file.name == "direct_url.json" &&
                 file.path.contains(".dist-info") -> true   // PEP 610 直接引用信息
-                
-            file.name == "installed-files.txt" && 
+
+            file.name == "installed-files.txt" &&
                 file.path.contains(".egg-info") -> true    // 已安装文件列表
-                
-            file.name == "requires.txt" && 
+
+            file.name == "requires.txt" &&
                 (file.path.contains(".egg-info") || file.path.contains(".dist-info")) -> true  // 依赖要求
 
             // 其他情况
@@ -720,7 +727,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
     override fun isTargetInvalidFile(file: File): Boolean {
         // 检查是否有失效的包文件
         return file.isFile && (
-            file.name.endsWith(".incomplete") || 
+            file.name.endsWith(".incomplete") ||
             file.name.endsWith(".whl.part") ||
             file.name.endsWith(".tar.gz.part")
         )
@@ -729,11 +736,11 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
     override fun getTargetPackageInfo(rootDir: File, file: File): PkgData {
         val packageDir = if (file.name == "packages.json") file.parentFile else file.parentFile
         val relativePath = packageDir?.relativeTo(rootDir)?.path?.replace('\\', '/')
-        
+
         // 根据不同文件类型进行处理
         var packageName = "unknown"
         var version = "unknown"
-        
+
         when {
             file.name.endsWith(".whl") -> {
                 // 从wheel文件名解析包名和版本
@@ -743,7 +750,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                 val parts = wheelFilename.split("-")
                 if (wheelFilename.endsWith(".whl") && parts.size >= 3) {
                     val match = wheelPatternRegex.find(wheelFilename)
-                    
+
                     if (match != null) {
                         packageName = match.groupValues[1]
                         version = if (parts[1].matches(versionNumberRegex)) {
@@ -773,18 +780,18 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                 }
             }
             // 源码分发包和其他压缩包格式
-            file.name.endsWith(".tar.gz") || file.name.endsWith(".zip") || 
+            file.name.endsWith(".tar.gz") || file.name.endsWith(".zip") ||
             file.name.endsWith(".tar.bz2") || file.name.endsWith(".tar.xz") -> {
                 // 从分发包文件名解析包名和版本
                 // 格式通常是: {package_name}-{version}.扩展名
                 // 示例: requests-2.28.1.tar.gz, django-4.2.0.zip
-                
+
                 // 获取基本文件名（去掉所有压缩扩展名）
                 val baseName = file.name
                     .replace(tarArchiveRegex, "")
-                
+
                 val sdistMatch = sdistPatternRegex.find(baseName)
-                
+
                 if (sdistMatch != null) {
                     packageName = sdistMatch.groupValues[1]
                     version = sdistMatch.groupValues[2]
@@ -808,7 +815,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                 val parts = eggFilename.split("-")
                 if (eggFilename.endsWith(".egg") && parts.size >= 3) {
                     val eggMatch = eggPatternRegex.find(eggFilename)
-                    
+
                     if (eggMatch != null) {
                         packageName = eggMatch.groupValues[1]
                         version = if (parts[1].matches(versionNumberRegex)) {
@@ -821,10 +828,10 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                         val simpleParts = file.nameWithoutExtension.split("-")
                         if (simpleParts.size >= 2) {
                             // 检查倒数第二部分是否是版本号
-                            val possibleVersionIndex = if (simpleParts.last().startsWith("py")) 
+                            val possibleVersionIndex = if (simpleParts.last().startsWith("py"))
                                 simpleParts.size - 2 else simpleParts.size - 1
-                            
-                            if (possibleVersionIndex >= 1 && 
+
+                            if (possibleVersionIndex >= 1 &&
                                 simpleParts[possibleVersionIndex].matches(versionNumberRegex)) {
                                 packageName = simpleParts.subList(0, possibleVersionIndex).joinToString("-")
                                 version = simpleParts[possibleVersionIndex]
@@ -851,7 +858,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                 val parts = eggInfoFilename.split("-")
                 if (eggInfoFilename.endsWith(".egg-info") && parts.size >= 2) {
                     val eggInfoMatch = eggInfoPatternRegex.find(eggInfoFilename)
-                    
+
                     if (eggInfoMatch != null) {
                         packageName = eggInfoMatch.groupValues[1]
                         version = if (parts[1].matches(versionNumberRegex)) {
@@ -861,19 +868,19 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                         }
                     } else {
                         // 检查是否有PKG-INFO文件，可以从中读取更准确的信息
-                        val pkgInfoFile = File(packageDir, "PKG-INFO") 
+                        val pkgInfoFile = File(packageDir, "PKG-INFO")
                         if (pkgInfoFile.exists()) {
                             try {
                                 val pkgInfoContent = pkgInfoFile.readText()
                                 val nameMatch = nameRegex.find(pkgInfoContent)
                                 val versionMatch = versionRegex.find(pkgInfoContent)
-                                
+
                                 if (nameMatch != null) {
                                     packageName = nameMatch.groupValues[1].trim()
                                 } else {
                                     packageName = file.name.removeSuffix(".egg-info")
                                 }
-                                
+
                                 if (versionMatch != null) {
                                     version = versionMatch.groupValues[1].trim()
                                 } else {
@@ -913,7 +920,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                 val dirName = if (file.name.endsWith(".dist-info")) file.name else file.parentFile.name
                 val distInfoFilename = if (file.name.endsWith(".dist-info")) file.name else file.parentFile.name
                 val distInfoMatch = distInfoPatternRegex.find(distInfoFilename)
-                
+
                 if (distInfoMatch != null) {
                     packageName = distInfoMatch.groupValues[1]
                     version = distInfoMatch.groupValues[2]
@@ -921,22 +928,22 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                     // 尝试从METADATA文件获取信息
                     val metadataFile = if (file.name.endsWith(".dist-info")) {
                         File(file, "METADATA")
-                    } else { 
+                    } else {
                         File(file.parentFile, "METADATA")
                     }
-                    
+
                     if (metadataFile.exists()) {
                         try {
                             val metadataContent = metadataFile.readText()
                             val nameMatch = nameRegex.find(metadataContent)
                             val versionMatch = versionRegex.find(metadataContent)
-                            
+
                             if (nameMatch != null) {
                                 packageName = nameMatch.groupValues[1].trim()
                             } else {
                                 packageName = dirName.removeSuffix(".dist-info")
                             }
-                            
+
                             if (versionMatch != null) {
                                 version = versionMatch.groupValues[1].trim()
                             } else {
@@ -974,7 +981,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                     val dirName = file.parentFile.name
                     val distInfoFilename = if (file.name.endsWith(".dist-info")) file.name else file.parentFile.name
                     val distInfoMatch = distInfoPatternRegex.find(distInfoFilename)
-                    
+
                     if (distInfoMatch != null) {
                         packageName = distInfoMatch.groupValues[1]
                         version = distInfoMatch.groupValues[2]
@@ -984,7 +991,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                             val metadataContent = file.readText()
                             val nameMatch = nameRegex.find(metadataContent)
                             val versionMatch = versionRegex.find(metadataContent)
-                            
+
                             packageName = nameMatch?.groupValues?.get(1)?.trim() ?: dirName.removeSuffix(".dist-info")
                             version = versionMatch?.groupValues?.get(1)?.trim() ?: "unknown"
                         } catch (e: Exception) {
@@ -1016,7 +1023,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                     val pkgInfoContent = file.readText()
                     val nameMatch = nameRegex.find(pkgInfoContent)
                     val versionMatch = versionRegex.find(pkgInfoContent)
-                    
+
                     packageName = nameMatch?.groupValues?.get(1)?.trim() ?: file.parentFile.name
                     version = versionMatch?.groupValues?.get(1)?.trim() ?: "unknown"
                 } catch (e: Exception) {
@@ -1026,7 +1033,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                         if (parentName.endsWith(".egg-info") || parentName == "EGG-INFO") {
                             val eggInfoFilename = if (parentName.endsWith(".egg-info")) parentName else "$parentName.egg-info"
                             val eggInfoMatch = eggInfoPatternRegex.find(eggInfoFilename)
-                            
+
                             if (eggInfoMatch != null) {
                                 packageName = eggInfoMatch.groupValues[1]
                                 version = eggInfoMatch.groupValues[2]
@@ -1057,7 +1064,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                 val dirName = file.parentFile.name
                 val setupFilename = if (file.name.endsWith(".py")) file.name else file.nameWithoutExtension
                 val setupMatch = setupPatternRegex.find(setupFilename)
-                
+
                 if (setupMatch != null) {
                     packageName = setupMatch.groupValues[1]
                     version = setupMatch.groupValues[2]
@@ -1067,7 +1074,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                         val setupContent = file.readText()
                         val nameMatch = setupNameRegex.find(setupContent)
                         val versionMatch = setupVersionRegex.find(setupContent)
-                        
+
                         packageName = nameMatch?.groupValues?.get(1)?.trim() ?: dirName
                         version = versionMatch?.groupValues?.get(1)?.trim() ?: "unknown"
                     } catch (e: Exception) {
@@ -1087,11 +1094,11 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                 // 从父目录尝试解析
                 if (file.parentFile != null) {
                     val parentName = file.parentFile.name
-                    
+
                     if (parentName.endsWith(".egg-info")) {
                         val eggInfoFilename = if (parentName.endsWith(".egg-info")) parentName else "$parentName.egg-info"
                         val eggInfoMatch = eggInfoPatternRegex.find(eggInfoFilename)
-                        
+
                         if (eggInfoMatch != null) {
                             packageName = eggInfoMatch.groupValues[1]
                             version = eggInfoMatch.groupValues[2]
@@ -1102,7 +1109,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                     } else if (parentName.endsWith(".dist-info")) {
                         val distInfoFilename = if (file.name.endsWith(".dist-info")) file.name else file.parentFile.name
                         val distInfoMatch = distInfoPatternRegex.find(distInfoFilename)
-                        
+
                         if (distInfoMatch != null) {
                             packageName = distInfoMatch.groupValues[1]
                             version = distInfoMatch.groupValues[2]
@@ -1128,7 +1135,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                         val pkgInfoContent = metadataFile.readText()
                         val nameMatch = nameRegex.find(pkgInfoContent)
                         val versionMatch = versionRegex.find(pkgInfoContent)
-                        
+
                         packageName = nameMatch?.groupValues?.get(1)?.trim() ?: file.nameWithoutExtension
                         version = versionMatch?.groupValues?.get(1)?.trim() ?: "unknown"
                     } catch (e: Exception) {
@@ -1139,7 +1146,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                     // 尝试从目录名解析
                     if (packageDir != null && packageDir.name.contains("-")) {
                         val dirMatch = sdistPatternRegex.find(packageDir.name)
-                        
+
                         if (dirMatch != null) {
                             packageName = dirMatch.groupValues[1]
                             version = dirMatch.groupValues[2]
@@ -1154,10 +1161,10 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                 }
             }
         }
-        
+
         // 规范化包名（PEP 503：把连字符、下划线、点都转换为连字符）
         val normalizedPackageName = packageName.lowercase().replace(pythonPackageNormalizeRegex, "-")
-        
+
         return PkgData(
             relativePath = relativePath ?: "",
             packageName = "$normalizedPackageName${getPackageNameSeparator()}$version",
@@ -1173,8 +1180,8 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
      * 实现新的 scanRepository 方法，使用 ConfigOptions 对象
      */
     override fun scanRepository(
-        dir: File, 
-        onDirFound: (File, String, PkgData) -> Unit, 
+        dir: File,
+        onDirFound: (File, String, PkgData) -> Unit,
         configOptions: ConfigOptions
     ) {
         val targetPackageName = configOptions.targetPackage.takeIf { it.isNotEmpty() }?.lowercase()
@@ -1183,18 +1190,18 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
         pathPkgDataMap.forEach { (path, pkgData) ->
             // 检查是否是invalid文件（损坏或未完成的下载）
             val isInvalidPackage = pkgData.invalid
-            
+
             // 检查是否是snapshot版本（预发布版本：含有dev, a, alpha, b, beta, rc等标记）
             val isSnapshotVersion = pkgData.packageName.contains(snapshotVersionRegex)
-            
+
             // 检查是否匹配指定的包名
             val packageNameParts = pkgData.packageName.split(":")
             val packageNameOnly = packageNameParts[0].lowercase()
-            
+
             // Python包通常有下划线和连字符的变体，所以我们需要规范化进行比较
             val normalizedPackageName = packageNameOnly.replace(pythonPackageNormalizeRegex, "-")
             val normalizedTargetName = targetPackageName?.replace(pythonPackageNormalizeRegex, "-") ?: ""
-            
+
             val isTargetPackage = when {
                 targetPackageName == null -> false // 如果没有指定包名，则不视为匹配
                 normalizedPackageName.startsWith(normalizedTargetName) -> true // 前缀匹配
@@ -1202,10 +1209,10 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                 packageNameOnly.startsWith("$targetPackageName.") -> true  // 处理父包情况
                 else -> false
             }
-            
+
             // 处理平台特定的二进制包（wheel包）
             val isNativeBinary = pkgData.packageDir.name.matches(nativeBinaryRegex)
-            
+
             // 筛选逻辑
             val shouldInclude = when {
                 configOptions.showInvalidPackages && isInvalidPackage -> true
@@ -1236,7 +1243,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
     private fun findSystemPythonSitePackages(): String? {
         val osName = System.getProperty("os.name").lowercase(Locale.getDefault())
         val userHome = System.getProperty("user.home")
-        
+
         // 常见的系统Python site-packages位置
         val possiblePaths = when {
             osName.contains("win") -> listOf(
@@ -1256,7 +1263,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                 "$userHome/.local/lib/python3.*/site-packages"
             )
         }
-        
+
         // 尝试找到第一个存在的路径
         for (pattern in possiblePaths) {
             // 使用简单的通配符匹配
@@ -1265,12 +1272,12 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                 val regex = globPattern.substringAfterLast("/").replace("*", ".*")
                 file.isDirectory && file.name.matches(Regex(regex))
             }
-            
+
             if (matchingDirs?.isNotEmpty() == true) {
                 return matchingDirs[0].absolutePath
             }
         }
-        
+
         return null
     }
 
@@ -1286,90 +1293,22 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
      * @return 如果需要用户选择则返回true
      */
     fun isCondaSelectionNeeded(): Boolean {
-        return environmentType == PythonEnvironmentType.CONDA && 
-               (condaInstallPath == null || environmentPath == null)
+        return environmentType == PythonEnvironmentType.CONDA && condaInstallPath == null
     }
-    
+
     /**
      * 处理用户选择的Conda目录
      * @param selectedDir 用户选择的目录
      * @return 找到的site-packages路径，如果无效则返回null
      */
-    fun processSelectedCondaDirectory(selectedDir: File): String? {
+    fun processSelectedCondaDirectory(selectedDir: File) {
         // 检查是否是有效的Conda目录
         if (!isValidCondaDir(selectedDir.absolutePath)) {
-            return null
+            return
         }
-        
         // 设置conda安装路径
-        condaInstallPath = selectedDir.absolutePath
-        
-        // 查找site-packages目录
-        val sitePkgsPath = findSitePackagesInConda(condaInstallPath!!)
-        if (sitePkgsPath != null) {
-            environmentPath = sitePkgsPath
-            return sitePkgsPath
-        }
-        
-        return null
-    }
-
-    /**
-     * 检测并初始化Python环境
-     * 该方法会检测项目中常见的Python环境标志并设置相应的环境类型
-     * @return 检测到的环境类型
-     */
-    fun detectPythonEnvironment(): PythonEnvironmentType {
-        // 如果已经设置了环境类型，则不再重新检测
-        if (environmentPath != null && environmentType != PythonEnvironmentType.SYSTEM) {
-            return environmentType
-        }
-        
-        val projectPath = project.basePath ?: return PythonEnvironmentType.SYSTEM
-        
-        // 检测项目中的虚拟环境
-        when {
-            // 检查venv目录
-            File("$projectPath/venv").exists() || 
-            File("$projectPath/.venv").exists() -> {
-                environmentType = PythonEnvironmentType.VENV
-                val venvDir = if (File("$projectPath/venv").exists()) "$projectPath/venv" else "$projectPath/.venv"
-                environmentPath = findSitePackagesInVenv(venvDir)
-            }
-            // 检查Pipenv
-            File("$projectPath/Pipfile").exists() -> {
-                environmentType = PythonEnvironmentType.PIPENV
-                // 尝试获取Pipenv的虚拟环境路径
-                val pipenvVenvPath = getPipenvVirtualEnvPath(projectPath)
-                if (pipenvVenvPath != null) {
-                    environmentPath = findSitePackagesInVenv(pipenvVenvPath)
-                }
-            }
-            // 检查Conda环境
-            File("$projectPath/environment.yml").exists() || 
-            File("$projectPath/conda-env.yml").exists() -> {
-                environmentType = PythonEnvironmentType.CONDA
-                // 尝试从conda配置文件中获取环境名称
-                val condaEnvName = getCondaEnvironmentName(projectPath)
-                if (condaEnvName != null) {
-                    val condaEnvPath = getCondaEnvironmentPath(condaEnvName)
-                    if (condaEnvPath != null) {
-                        environmentPath = findSitePackagesInVenv(condaEnvPath)
-                    }
-                } else {
-                    // 如果找不到环境名称，尝试检测常见的conda安装路径
-                    detectCondaInstallation()
-                }
-            }
-            // 检查系统Python
-            else -> {
-                environmentType = PythonEnvironmentType.SYSTEM
-                // 尝试查找系统Python路径
-                environmentPath = findSystemPythonSitePackages()
-            }
-        }
-        
-        return environmentType
+        condaInstallPath = selectedDir.absolutePath.replace('\\', '/')
+        updateEnvironmentType(PythonEnvironmentType.CONDA)
     }
 
     /**

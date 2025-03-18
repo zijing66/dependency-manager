@@ -23,6 +23,7 @@ import javax.swing.table.AbstractTableModel
 import javax.swing.table.DefaultTableCellRenderer
 import javax.swing.table.TableCellRenderer
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 
 private val LOG = logger<DependencyCleanupToolWindow>()
 
@@ -113,7 +114,9 @@ private class PreviewTableModel : AbstractTableModel() {
 
 private class DependencyCleanupPanel(private val project: Project) : JPanel(BorderLayout()) {
     private val previewTable: JBTable
-    private val previewModel: PreviewTableModel
+    private val previewModel: PreviewTableModel = PreviewTableModel()
+
+    private val initialized = AtomicBoolean(false)
 
     private var currentPreview: CleanupSummary? = null
     private val headerCheckBox = JCheckBox()
@@ -136,11 +139,10 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
     private var pythonEnvTypePanel: JPanel? = null
 
     init {
-        previewModel = PreviewTableModel()
         previewTable = JBTable(previewModel).apply {
             setShowGrid(true)
             gridColor = JBColor.border()
-            setStriped(true)
+            isStriped = true
             autoResizeMode = JTable.AUTO_RESIZE_SUBSEQUENT_COLUMNS
 
             // 设置列宽
@@ -190,11 +192,11 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
                     horizontalAlignment = SwingConstants.CENTER
                     
                     if (!isSelected) {
-                        when (value) {
-                            "matched" -> foreground = JBColor.GREEN.darker()
-                            "prerelease", "snapshot" -> foreground = JBColor.ORANGE // 统一prerelease和snapshot的样式
-                            "native" -> foreground = JBColor.BLUE
-                            else -> foreground = JBColor.GRAY
+                        foreground = when (value) {
+                            "matched" -> JBColor.GREEN.darker()
+                            "prerelease", "snapshot" -> JBColor.ORANGE // 统一prerelease和snapshot的样式
+                            "native" -> JBColor.BLUE
+                            else -> JBColor.GRAY
                         }
                     }
                     
@@ -203,7 +205,7 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
             }
 
             // 修改表头复选框引用
-            val header = getTableHeader()
+            val header = tableHeader
             headerCheckBox.apply {  // 使用成员变量
                 addActionListener {
                     previewModel.setAllSelected(isSelected)
@@ -252,10 +254,10 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
                 override fun mouseMoved(e: java.awt.event.MouseEvent) {
                     val row = rowAtPoint(e.point)
                     val column = columnAtPoint(e.point)
-                    if (column == 1 && row >= 0) { // 检查是否在Package Name列
-                        toolTipText = "Double click to open Explorer"
+                    toolTipText = if (column == 1 && row >= 0) { // 检查是否在Package Name列
+                        "Double click to open Explorer"
                     } else {
-                        toolTipText = null // 清除提示
+                        null // 清除提示
                     }
                 }
             })
@@ -430,11 +432,12 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
             controlPanel.add(Box.createVerticalStrut(5))
             
             // 使用PIPConfigService的detectPythonEnvironment方法初始化默认选项
+            val detectedType: PythonEnvironmentType
             val pipConfigService = configService as? PIPConfigService
             if (pipConfigService != null) {
                 // 检测当前环境并获取类型
-                val detectedType = pipConfigService.detectPythonEnvironment()
-                
+                detectedType = pipConfigService.detectPythonEnvironment()
+                pipConfigService.setEnvironmentType(detectedType)
                 // 根据检测到的环境类型设置选中状态
                 when (detectedType) {
                     PythonEnvironmentType.SYSTEM -> systemRadio.isSelected = true
@@ -492,10 +495,10 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
             isEnabled = false
             addActionListener {
                 try {
-                    val newPath = if (pathField.text.isBlank()) {
+                    val newPath = pathField.text.ifBlank {
                         // 当输入框为空时，获取系统默认路径
                         val defaultPath = configService.getLocalRepository(true)
-                        
+
                         // 处理PIP配置服务特殊情况
                         if (currentDependencyType == DependencyType.PIP) {
                             val pipConfigService = configService as? PIPConfigService
@@ -511,8 +514,6 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
                             configService.updateLocalRepository(defaultPath)
                             defaultPath
                         }
-                    } else {
-                        pathField.text
                     }
                     
                     // 更新当前路径和输入框显示
@@ -556,6 +557,19 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
             })
             add(Box.createHorizontalStrut(5))
             add(refreshButton)
+        }
+
+        if (DependencyType.PIP == currentDependencyType) {
+            val selectedButton = getSelectedButton(pythonEnvTypeGroup)
+            updatePythonEnvironment(
+                when (selectedButton?.text) {
+                    "System" -> PythonEnvironmentType.SYSTEM
+                    "Virtual Env" -> PythonEnvironmentType.VENV
+                    "Conda" -> PythonEnvironmentType.CONDA
+                    "Pipenv" -> PythonEnvironmentType.PIPENV
+                    else -> PythonEnvironmentType.SYSTEM
+                }
+            )
         }
         
         // 使用新定义的方法创建过滤面板
@@ -621,9 +635,21 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
             val hasSelection = previewModel.getSelectedItems().isNotEmpty()
             cleanButton.isEnabled = hasSelection
         }
+
+        initialized.set(true)
         // 刷新面板
         controlPanel.revalidate()
         controlPanel.repaint()
+    }
+
+    // 获取 ButtonGroup 中的选中按钮
+    private fun getSelectedButton(buttonGroup: ButtonGroup): AbstractButton? {
+        for (button in buttonGroup.elements) {
+            if (button.isSelected) {
+                return button
+            }
+        }
+        return null
     }
 
     private fun updateConfigService(dependencyType: DependencyType) {
@@ -891,10 +917,19 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
         pathField.text = newPath
         
         // 检查是否需要用户选择Conda目录
-        if (envType == PythonEnvironmentType.CONDA && pipConfigService.isCondaSelectionNeeded() && 
-            (newPath.isEmpty() || !File(newPath).exists())) {
+        if (initialized.get() && envType == PythonEnvironmentType.CONDA && pipConfigService.isCondaSelectionNeeded()) {
             // 如果是Conda但需要用户选择，提示用户选择
-            promptForCondaPath()
+            val promptForCondaPath = promptForCondaPath()
+            if (promptForCondaPath != null) {
+                currentRepoPath = pipConfigService.getLocalRepository(true)
+                pathField.text = currentRepoPath
+            } else {
+                // 如果用户取消了选择，清空路径并更新UI
+                pipConfigService.updateLocalRepository("")
+                currentRepoPath = ""
+                pathField.text = ""
+            }
+
         } else if (newPath.isEmpty() || !File(newPath).exists()) {
             // 如果路径无效，清空文本框
             pathField.text = ""
@@ -906,7 +941,7 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
     }
     
     // 提示用户选择Conda安装路径
-    private fun promptForCondaPath() {
+    private fun promptForCondaPath() : String? {
         // 显示提示对话框
         Messages.showInfoMessage(
             project,
@@ -922,14 +957,13 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
         
         if (fileChooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
             val selectedDir = fileChooser.selectedFile
-            val pipConfigService = configService as? PIPConfigService ?: return
-            
+            val pipConfigService = configService as? PIPConfigService ?: return null
+
             // 让服务处理选择的目录
-            val sitePkgsPath = pipConfigService.processSelectedCondaDirectory(selectedDir)
-            
-            if (sitePkgsPath != null) {
-                currentRepoPath = sitePkgsPath
-                pathField.text = sitePkgsPath
+            pipConfigService.processSelectedCondaDirectory(selectedDir)
+            val sitePkgsPath = configService.getLocalRepository(true)
+            if (sitePkgsPath.isNotEmpty()) {
+                return sitePkgsPath
             } else {
                 Messages.showErrorDialog(
                     project,
@@ -938,5 +972,6 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
                 )
             }
         }
+        return null
     }
 }
