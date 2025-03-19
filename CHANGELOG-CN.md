@@ -2,6 +2,12 @@
 
 [English Change Log](CHANGELOG.md)
 
+## [Unreleased]
+
+### 修复
+
+- 无任何过滤选项时，预览按钮就禁用
+
 ## [1.1.1]
 
 ### 新增
