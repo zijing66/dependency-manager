@@ -134,7 +134,9 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
     private lateinit var pipenvRadio: JRadioButton
     private lateinit var pathField: JTextField
     private var currentRepoPath: String = ""
-    private var refreshButton: JButton? = null
+    private lateinit var refreshButton: JButton
+    private lateinit var previewButton: JButton
+    private lateinit var cleanButton: JButton
     private var pythonEnvTypePanel: JPanel? = null
 
     init {
@@ -449,13 +451,11 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
             }
         }
 
-        lateinit var refreshButton: JButton
-
-        val previewButton = JButton("Preview Cleanup").apply {
+        previewButton = JButton("Preview Cleanup").apply {
             addActionListener { loadPreview(configService) }
         }
 
-        val cleanButton = JButton("Clean Selected").apply {
+        cleanButton = JButton("Clean Selected").apply {
             isEnabled = false
             addActionListener { performCleanup(configService) }
         }
@@ -534,7 +534,6 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
                 }
             }
         }
-        this.refreshButton = refreshButton
 
         val repoPanel = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.X_AXIS)
@@ -635,10 +634,21 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
             cleanButton.isEnabled = hasSelection
         }
 
+        previewButtonStat(previewButton)
+
         initialized.set(true)
         // 刷新面板
         controlPanel.revalidate()
         controlPanel.repaint()
+    }
+
+    private fun previewButtonStat(previewButton: JButton) {
+        val configOptions = ConfigOptions.getInstance()
+        if (configOptions.includeSnapshot || configOptions.showInvalidPackages || configOptions.showPlatformSpecificBinaries || configOptions.targetPackage.isNotEmpty()) {
+            previewButton.isEnabled = true
+        } else {
+            previewButton.isEnabled = false
+        }
     }
 
     // 获取 ButtonGroup 中的选中按钮
@@ -679,7 +689,7 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
                 return@judgeForDependencyType true
             }
             return@judgeForDependencyType false
-        }, arrayOf(DependencyType.GRADLE, DependencyType.NPM, DependencyType.PIP)) && return
+        }, arrayOf(DependencyType.MAVEN, DependencyType.GRADLE, DependencyType.NPM, DependencyType.PIP)) && return
 
         progressBar.isVisible = true
         progressBar.isIndeterminate = true
@@ -797,6 +807,7 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
                 addActionListener {
                     // 更新配置
                     configOptions.includeSnapshot = isSelected
+                    previewButtonStat(previewButton)
                 }
             }.apply { 
                 alignmentX = Component.LEFT_ALIGNMENT 
@@ -812,6 +823,7 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
                 addActionListener {
                     // 更新配置
                     configOptions.showInvalidPackages = isSelected
+                    previewButtonStat(previewButton)
                 }
             }.apply { 
                 alignmentX = Component.LEFT_ALIGNMENT 
@@ -827,6 +839,7 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
                     toolTipText = "Show platform-specific binary files (win32-x64, darwin-arm64, etc.)"
                     addActionListener {
                         configOptions.showPlatformSpecificBinaries = isSelected
+                        previewButtonStat(previewButton)
                     }
                 }.apply { 
                     alignmentX = Component.LEFT_ALIGNMENT 
@@ -890,6 +903,7 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
                         
                         private fun updateConfig() {
                             ConfigOptions.getInstance().targetPackage = text.takeIf { it.isNotEmpty() } ?: ""
+                            previewButtonStat(previewButton)
                         }
                     })
                 })
@@ -940,7 +954,7 @@ private class DependencyCleanupPanel(private val project: Project) : JPanel(Bord
         }
         
         // 更新按钮状态
-        refreshButton?.isEnabled = false
+        refreshButton.isEnabled = false
     }
     
     // 提示用户选择Conda安装路径
