@@ -9,7 +9,10 @@ class DependencyManagerDetector {
         val projectPath = project.basePath ?: return DependencyType.UNKNOWN
         
         return when {
-            File("$projectPath/pom.xml").exists() -> DependencyType.MAVEN
+            File("$projectPath/pom.xml").exists() ||
+            File("$projectPath/.mvn").exists() ||
+            File("$projectPath/mvnw").exists() ||
+            File("$projectPath/mvnw.cmd").exists() -> DependencyType.MAVEN
 
             File("$projectPath/build.gradle").exists() || 
             File("$projectPath/build.gradle.kts").exists() || 
