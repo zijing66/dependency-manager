@@ -257,6 +257,10 @@ class NPMConfigService(project: Project) : AbstractConfigService(project) {
         }
     }
 
+    override fun cleanLocalRepository() {
+        customRepoPath = null
+    }
+
     override fun isTargetFile(file: File): Boolean {
         // 检查是否是npm相关文件
         return when (packageManager) {

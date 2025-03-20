@@ -15,6 +15,8 @@ interface IConfigService {
 
     fun updateLocalRepository(newPath: String)
 
+    fun cleanLocalRepository()
+
     /**
      * 预览清理操作
      * @param configOptions 配置选项，包含includeSnapshot, showInvalidPackages, showPlatformSpecificBinaries等选项

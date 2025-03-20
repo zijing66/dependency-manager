@@ -97,11 +97,13 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
         when (type) {
             PythonEnvironmentType.VENV -> {
                 val venvPath = findVenvPath()
-                environmentPath = venvPath?.let { findSitePackagesInVenv(it) }
-                environmentPath = if (environmentPath == null) {
-                    getVenvCacheDirectory(venvPath!!)
-                } else {
-                    environmentPath
+                environmentPath = venvPath?.let { findSitePackagesInVenv(it)?.replace('\\', '/') }
+                if (venvPath != null) {
+                    environmentPath = if (environmentPath == null) {
+                        getVenvCacheDirectory(venvPath)
+                    } else {
+                        environmentPath
+                    }
                 }
             }
             PythonEnvironmentType.CONDA -> {
@@ -121,11 +123,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                     if (sitePkgsPath != null) {
                         environmentPath = sitePkgsPath
                     }
-                    environmentPath = if (environmentPath == null) {
-                        getCondaCacheDirectory(condaInstallPath!!)
-                    } else {
-                        environmentPath
-                    }
+                    environmentPath = environmentPath ?: getCondaCacheDirectory(condaInstallPath!!)
                 }
             }
             PythonEnvironmentType.PIPENV -> {
@@ -146,7 +144,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
                 // 查找系统Python的site-packages
                 environmentPath = findSystemPythonSitePackages()
                 environmentPath = if (environmentPath == null) {
-                    getPipCacheDirectory()
+                    getPipCacheDirectory().replace('\\', '/')
                 } else {
                     environmentPath
                 }
@@ -199,7 +197,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
         // 尝试找到Conda安装位置
         for (condaPath in possibleCondaPaths) {
             if (File(condaPath).exists() && isValidCondaDir(condaPath)) {
-                return condaPath
+                return condaPath.replace('\\', '/')
             }
         }
         return null
@@ -325,7 +323,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
         // 检查site-packages目录的常见位置
         val sitePkgsPathWin = "$condaPath/Lib/site-packages"
         if (File(sitePkgsPathWin).exists()) {
-            return sitePkgsPathWin
+            return sitePkgsPathWin.replace('\\', '/')
         }
 
         // 对于Unix系统，尝试找到python3.*目录
@@ -338,7 +336,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
             if (pythonDirs?.isNotEmpty() == true) {
                 val sitePkgs = "${pythonDirs[0].absolutePath}/site-packages"
                 if (File(sitePkgs).exists()) {
-                    return sitePkgs
+                    return sitePkgs.replace('\\', '/')
                 }
             }
         }
@@ -358,7 +356,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
             val exitCode = process.waitFor()
 
             if (exitCode == 0 && output.isNotEmpty()) {
-                return output
+                return output.replace('\\', '/')
             }
         } catch (e: IOException) {
             Messages.showErrorDialog(
@@ -381,7 +379,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
             }
 
             if (possibleEnvs?.isNotEmpty() == true) {
-                return possibleEnvs[0].absolutePath
+                return possibleEnvs[0].absolutePath.replace('\\', '/')
             }
         }
 
@@ -556,7 +554,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
 
         for (venvDir in venvDirs) {
             if (File(venvDir).exists()) {
-                return venvDir
+                return venvDir.replace('\\', '/')
             }
         }
 
@@ -601,6 +599,14 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
             }
         } else {
             throw IllegalArgumentException("Invalid repository path: $newPath")
+        }
+    }
+
+    override fun cleanLocalRepository() {
+        customRepoPath = null
+        if (PythonEnvironmentType.CONDA == environmentType) {
+            condaInstallPath = null
+            stateComponent.state.condaInstallationPath = null
         }
     }
 
@@ -1186,15 +1192,16 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
 
         // 尝试找到第一个存在的路径
         for (pattern in possiblePaths) {
+            val newPattern = pattern.replace('\\', '/')
             // 使用简单的通配符匹配
-            val globPattern = pattern.replace("*", "?").replace("?", "*")
-            val matchingDirs = File(pattern.substringBeforeLast("/")).listFiles { file ->
+            val globPattern = newPattern.replace("*", "?").replace("?", "*")
+            val matchingDirs = File(newPattern.substringBeforeLast("/")).listFiles { file ->
                 val regex = globPattern.substringAfterLast("/").replace("*", ".*")
                 file.isDirectory && file.name.matches(Regex(regex))
             }
 
             if (matchingDirs?.isNotEmpty() == true) {
-                return matchingDirs[0].absolutePath
+                return matchingDirs[0].absolutePath.replace('\\', '/')
             }
         }
 
@@ -1250,7 +1257,7 @@ class PIPConfigService(project: Project) : AbstractConfigService(project) {
             if (pythonDirs?.isNotEmpty() == true) {
                 val sitePkgs = "${pythonDirs[0].absolutePath}/site-packages"
                 if (File(sitePkgs).exists()) {
-                    return sitePkgs
+                    return sitePkgs.replace('\\', '/')
                 }
             }
         }

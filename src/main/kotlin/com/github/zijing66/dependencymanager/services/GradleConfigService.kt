@@ -3,6 +3,7 @@ package com.github.zijing66.dependencymanager.services
 import com.github.zijing66.dependencymanager.models.ConfigOptions
 import com.github.zijing66.dependencymanager.models.DependencyType
 import com.github.zijing66.dependencymanager.models.PkgData
+import com.github.zijing66.dependencymanager.models.PythonEnvironmentType
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.project.Project
 import java.io.File
@@ -75,6 +76,10 @@ class GradleConfigService(project: Project) : AbstractConfigService(project) {
         } else {
             throw IllegalArgumentException("Invalid repository path: $newPath")
         }
+    }
+
+    override fun cleanLocalRepository() {
+        customRepoPath = null
     }
 
     override fun isTargetFile(file: File): Boolean {
