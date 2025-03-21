@@ -4,10 +4,11 @@
 
 [中文更新日志](CHANGELOG-CN.md)
 
-## [Unreleased]
+## [1.1.2]
 
 ### Fixed
 
+- Fixed some issues
 - Preview button disabled when no filter option is selected
 
 ## [1.1.1]
