@@ -2,6 +2,12 @@
 
 [English Change Log](CHANGELOG.md)
 
+## [1.1.3]
+
+### 修复
+
+- 兼容性升级
+
 ## [1.1.2]
 
 ### 修复
