@@ -4,6 +4,12 @@
 
 [中文更新日志](CHANGELOG-CN.md)
 
+## [1.1.4]
+
+### Fixed
+
+- Dependency upgrades
+
 ## [1.1.3]
 
 ### Fixed
